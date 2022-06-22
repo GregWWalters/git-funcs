@@ -1,0 +1,134 @@
+# git custom command helper functions
+
+function testInteger {
+	[ -n "$1" -a  "$1" -eq "$1" ] 2>/dev/null
+}
+
+termWidth() (
+	if command stty &>/dev/null; then
+		w=$(stty size | cut -w -f2)
+	elif command tput &>/dev/null; then
+		w=$(tput cols)
+	else
+		w=60
+	fi
+	echo $w
+)
+
+indent() (
+	testInteger $1 || {
+		echo >&2 "indent requires number of spaces as the first argument"
+		return 1
+	}
+	space=$1; shift
+	maxWidth=$(termWidth) || width=60
+	width=$(expr $maxWidth - $space)
+	[ $# -gt 0 ] && echo $* | fold -sw $width | pr -to $space
+)
+
+function heading {
+	indent 2 "$*"
+}
+
+function body {
+	while [ $# -gt 0 ]; do
+		indent 6 "$1\n"
+		shift
+	done
+}
+
+function option {
+	indent 6 $1
+	shift
+	while [ $# -gt 0 ]; do
+		indent 10 "$1\n"
+		shift
+	done
+}
+
+# Returns the remote set in the repository git config as a string. Exits 1 if
+# not found (unless `-o` is set)
+# getPrimaryRemote [-o]
+getPrimaryRemote() (
+	o=0
+	while getopts ":o" opt; do
+		case $opt in
+			o) # error reporting off
+				o=1
+				;;
+			\?)
+				echo >&2 "Unknown option -$OPTARG."
+				return 1
+				;;
+		esac
+	done
+	remote=$(git config --local --get funcs.defaultRemote || :)
+	echo $remote
+	if [ $o -eq 0 ]; then [ -n $remote ]; fi
+)
+
+# Returns the branch set in the repository git config as a string. Exits 1 if
+# not found (unless `-o` is set)
+# getPrimaryBranch [-o]
+getPrimaryBranch() (
+	o=0
+	while getopts ":o" opt; do
+		case $opt in
+			o) # error reporting off
+				o=1
+				;;
+			\?)
+				echo >&2 "Unknown option -$OPTARG."
+				return 1
+				;;
+		esac
+	done
+	branch=$(git config --local --get funcs.defaultBranch || :)
+	echo $branch
+	if [ $o -eq 0 ]; then [ -n $branch ]; fi
+)
+
+# configValueOn returns whether a git config value is set to true
+# configValueOn [-q|-e] [-o] [-k <key>] [-c <command>] <key> [<command>]
+configValueOn() (
+	q=1 echo=0 o=0
+	while getopts ":qeok:f:" opt; do
+		case $opt in
+			q) q=1; echo=0; ;;  # quiet on
+			e) echo=1; q=0 ;;   # echo on
+			o) o=1 ;;           # error reporting off
+			k) key=$OPTARG; shift; ;;
+			f) func=$OPTARG; shift; ;;
+			:)
+				echo >&2 "Option \`-$OPTARG\` requires an argument." \
+					"Run git refresh -h for help."
+				exit 1
+				;;
+			\?)
+				echo >&2 "Unknown option -$OPTARG."
+				return 1
+				;;
+		esac
+	done
+
+	key=${key:-${@:OPTIND:1}}
+	func=${func:-${@:OPTIND+1:1}}
+	if [ -z "$key" ]; then
+		echo >&2 "configValueOn requires the name of the key"
+		return 1
+	fi
+
+	[ -n "$func" ] && \
+		val=$(git config --get --type=bool "funcs.$func.$key" || :)
+	[ -z "$val" ]&& \
+		$(git config --get --type=bool "funcs.$key" || :)
+
+	if [ $q -eq 1 ]; then
+		[ "$val" = "true" ]
+	else
+		echo ${val:-"false"}
+		if [ $o -eq 0 ]; then [ -z "$val" ]; fi
+	fi
+)
+
+# vim:ft=sh

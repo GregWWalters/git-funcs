@@ -1,0 +1,84 @@
+#! /usr/bin/env sh
+
+set -e # errexit
+source "$(dirname "$0")/helpers"
+
+function helpTxt {
+	heading 'NAME'
+	body "git-co-primary - Check out the remote repository's latest HEAD"
+
+	heading 'SYNOPSIS'
+	body 'git co-primary [-s] [-q|-v] [<remote>]'
+
+	heading 'DESCRIPTION'
+	body "Check out the primary branch of the primary remote repository. If a
+	remote is provided as an argument, the primary branch of that remote will be
+	checked out instead."
+	body "Any uncommitted changes will be stashed before checkout and
+	re-applied after."
+
+	heading 'OPTIONS'
+	option '-s' '(stash) Automatically stash uncommitted changes before checking
+	out the branch and pop after'
+	option '-q', '(quiet) Print nothing to stdout. Overrides .gitconfig options
+	funcs.verbose and funcs.refresh.verbose.'
+	option '-v' '(verbse) Print additional information'
+	option '-h' '(help) Print this help.'
+}
+
+case "$1" in
+	"help"|"-help"|"--help")
+		helpTxt
+		exit 0
+		;;
+esac
+
+s=0 q=0 v=0
+while getopts ":hsqv" opt; do
+	case $opt in
+		h) helpTxt; exit 0 ;;
+		s) s=0 ;;
+		q) q=1 v=0; ;;
+		v) v=1 ;;
+		\?)
+			echo >&2 "Unknown option -$OPTARG. Run git co-primary -h for help."
+			exit 1
+			;;
+	esac
+done
+shift $(expr $OPTIND - 1)
+
+if [ $q -eq 1 ]; then
+	v=0
+elif [ $v -eq 1 ] || configValueOn -o -q "verbose" "co-primary"; then
+	v=1
+fi
+
+# redirect output of the next block
+[ $v -eq 1 ] && exec 4>&1 || exec 4>/dev/null
+{
+	remote=$1
+	if [ -n "$remote" ]; then
+		echo "checking out primary branch from remote $remote"
+	fi
+
+	remote=${remote:-$(git primary)}
+	if [ -z "$remote" ]; then
+		echo >&2 "this repository has no remote set"
+		exit 1
+	fi
+
+	echo "checking out primary branch from primary remote $remote"
+
+	# Check for uncommitted changes
+	if git diff-index --quiet HEAD; then dirty=1; else dirty=0; fi
+	if [ $dirty -eq 1 -a $s -eq 0 ]; then
+		echo >&2 'There are uncommitted changes. Commit or stash them, or use `-s`
+			to stash them automatically.'
+	fi
+	if [ $dirty -eq 1 ]; then git stash push; fi
+	git fetch $(echo $remote | cut -d '/' -f1 )
+	git checkout $remote
+	if [ $dirty -eq 1 ]; then git stash pop; fi
+} >&4
+

@@ -1,0 +1,67 @@
+#! /usr/bin/env sh
+
+set -e # errexit
+source "$(dirname "$0")/helpers"
+
+function helpTxt {
+	heading 'NAME'
+	body 'git-merged-into - Check if one branch has been merged into another'
+
+	heading 'SYNOPSIS'
+	body 'git merged-into [-v|-q] [<ancestor>] [<descendent>]'
+
+	heading 'DESCRIPTION'
+	body 'Check if the first branch <ancestor> has been merged into the second
+	branch <descendent>. This is accomplished with `git merge-base --is-ancestor`,
+	which effectively looks for the head of <ancestor> in the commit history of
+	<descendent>. If <descendent> is not provided, the primary branch will be
+	used. If <ancestor> is not provided, the current head will be used.'
+	body 'As `merge-base` normally does, the exit
+	status will be 0 if the first branch has been merged into the second or
+	1 if not. If the `-v` (verbose) flag is set, it will also print out the
+	result.'
+
+	heading 'OPTIONS'
+	option '-q', '(quiet) Write nothing to stdout and use the exit status instead,
+		returning 0 if the first branch is merged into the second or 1 if not.'
+	option '-v' '(verbose) Print additional information (default)'
+	option '-h' '(help) Print this help.'
+}
+case "$1" in
+	"help"|"-help"|"--help")
+		helpTxt
+		exit 0
+		;;
+esac
+
+q=0 v=1
+while getopts ":hqv" opt; do
+	case $opt in
+		h) helpTxt; exit 0 ;;
+		q) q=1 v=0; ;;
+		v) v=1 ;;
+		\?)
+			echo >&2 "Unknown option -$OPTARG. Run git co-primary -h for help."
+			exit 1
+			;;
+	esac
+done
+shift $(expr $OPTIND - 1)
+
+[ $q -eq 1 ] && v=0 || {
+	[ $v -eq 1 ] || configValueOn -o -q "verbose" "merged-into" && v=1
+}
+
+ancestor=${1:-'HEAD'}
+descendant=${2:-$(git primary)}
+
+if git merge-base --is-ancestor "$ancestor" "$descendant"; then
+	[ $v -eq 1 ] \
+		&& echo "$ancestor merged into $descendant" \
+		|| return 0
+else
+	[ $v -eq 1] \
+		&& echo "$ancestor not merged into $descendant" \
+		|| return 1
+fi
+

@@ -1,0 +1,87 @@
+#! /usr/bin/env sh
+
+set -e # errexit
+source "$(dirname "$0")/helpers"
+
+function helpTxt {
+	heading 'NAME'
+	body 'git-primary - Show the primary remote and branch for new branches and
+	rebasing'
+
+	heading 'SYNOPSIS'
+	body 'git primary [-r|-b] [-q|-v] [<remote>]'
+
+	heading 'DESCRIPTION'
+	body "Show the remote and branch that feature branches should be based on. If
+	<remote> is provided, it will show the primary branch for that remote instead
+	of the primary remote. Otherwise, it will first check the repository's
+	configuration for the primary remote, and if not found, return the first
+	remote assiciated with the repository. To change the primary remote, use
+	git-refesh -s <remote>."
+
+	heading 'OPTIONS'
+	option '-r' '(remote only) Print only the remote, not the primary branch'
+	option '-b' '(branch only) Print only the branch name, not the leading
+		"<remote>/".'
+	option '-q' '(quiet) Supress echoing the primary branch. Overrides .gitconfig
+		options funcs.verbose and funcs.refresh.verbose.'
+	option '-v' '(verbose) Print additional information'
+	option '-h' '(help) Print this help'
+}
+
+case "$1" in
+	"help"|"-help"|"--help")
+		helpTxt
+		exit 0
+		;;
+esac
+
+bo=0 ro=0 q=0 v=0;
+while getopts ":hqvbr" opt; do
+	case $opt in
+		h) helpTxt; exit 0 ;;
+		b) bo=1 ;;
+		r) ro=1 ;;
+		q) q=1; v=0; ;;
+		v) v=1 ;;
+		\?)
+			echo >&2 "Unknown option -$OPTARG". \
+				'Run git primary -h for help.'
+			exit 1
+			;;
+	esac
+done
+shift $(expr $OPTIND - 1)
+
+[ $q -eq 1 ] && v=0 || {
+	[ $v -eq 1 ] || configValueOn -o -q "verbose" "primary" && v=1
+}
+
+remoteArg=$1
+if [ -n "$remoteArg" ]; then
+	[ $v -eq 1 ] && echo "looking up primary branch for $remoteArg"
+	echo $(git refresh -n -e $remoteArg)
+	exit 0
+fi
+
+dRemote=$(git config --local --get funcs.primaryRemote || :)
+dBranch=$(git config --local --get funcs.primaryBranch || :)
+if [ -z "$dRemote" -o -z "$dBranch" ]; then
+	[ $v -eq 1 ] && echo "looking up primary remote and branch"
+	auto=$(git refresh -e)
+	remote=${auto%%/*}
+	branch=${auto#*/}
+else
+	[ $v -eq 1 ] && echo "using primary branch from local git config"
+	remote=$dRemote
+	branch=$dBranch
+fi
+
+if [ $ro -eq 1 -a $bo -eq 0 ]; then
+	echo $remote
+elif [ $ro -eq 0 -a $bo -eq 1 ]; then
+	echo $branch
+else
+	echo "$remote/$branch"
+fi
+

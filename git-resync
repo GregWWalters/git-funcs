@@ -1,0 +1,75 @@
+#! /usr/bin/env sh
+
+set -e # errexit
+source "$(dirname "$0")/helpers"
+
+# Help text
+function helpTxt {
+	heading 'NAME'
+	body "git-resync - Rebase the local HEAD on the remote's latest HEAD"
+
+	heading 'SYNOPSIS'
+	body "git resync [-v|-q] [<remote>]"
+
+	heading 'DESCRIPTION'
+	body "Fetch the latest HEAD from this repository's remote and rebase the local
+	HEAD on it. If <remote> is provided, it will show the primary branch for that
+	remote instead of the primary remote."
+	body "Otherwise, it will first check the repository's configuration for the
+	primary remote, and if not found, return the first remote assiciated with the
+	repository."
+	body "To change the primary remote, use git-refesh -s <remote>."
+
+	heading 'OPTIONS'
+	option '-q' '(quiet) Supress writing to stdout. Overrides .gitconfig
+		options funcs.verbose and funcs.refresh.verbose.'
+	option '-v' '(verbose) Print additional information'
+	option '-h' 'Print this help'
+
+	echo "\n"
+}
+
+case "$1" in
+	"help"|"-help"|"--help")
+		helpTxt
+		exit 0
+		;;
+esac
+
+q=0 v=0
+while getopts ":hqv" opt; do
+	case $opt in
+		h) helpTxt; exit 0 ;;
+		q) q=1; e=0 ;;
+		v) v=1 ;;
+		\?)
+			echo >&2 "Unknown option -$OPTARG". \
+				'Run git resync -h for help.'
+			exit 1
+			;;
+	esac
+done
+shift $(expr $OPTIND - 1)
+
+remoteArg=$1
+primary=${remoteArg:-$(git primary)}
+if [ -z "$primary" ]; then
+	echo >&2 "this repository has no remote set"
+	exit 1
+fi
+
+
+remote=${primary%%/*}
+branch=${primary#*/}
+
+[ $q -eq 1 ] && v=0 || {
+	[ $v -eq 1 ] || configValueOn -o -q "verbose" "co-primary" && v=1
+}
+
+# redirect output of the next block
+[ $v -eq 1 ] && exec 4>&1 || exec 4>/dev/null
+{
+	git fetch $remote
+	git rebase --autostash -s recursive -X patience "$remote/$branch"
+} >&4
+

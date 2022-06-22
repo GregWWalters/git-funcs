@@ -1,0 +1,167 @@
+#! /usr/bin/env sh
+
+# TODO: allow saving multiple primaries?
+
+set -e # errexit
+source "$(dirname "$0")/helpers"
+
+function helpTxt {
+	heading 'NAME'
+	body 'git-refresh - Determine the primary branch for new branches and rebasing'
+
+	heading 'SYNOPSIS'
+	body 'git refresh [-e|-q] [-v] [-s|-n] [<remote>]'
+
+	heading 'DESCRIPTION'
+	body 'Determine the branch that feature branches should be based on. The -e
+	and -q options and the -s and -n options will override each other, and
+	whichever is last takes precedence.'
+	body 'Determine the branch that feature branches should be based on. The -e and -q
+	options and the -s and -n options will override each other, and whichever is
+	last takes precedence.'
+	body 'If neither -e nor -q are set, refresh will check git configuration files and
+	echo if funcs.refresh.echo or funcs.echo is true.'
+	body "If neither -s nor -n are set, refresh will check the repository's git
+	configuration for a saved primary remote, and if not found, it will save the
+	primary remote and branch based on the repository's first listed remote."
+
+	heading 'OPTIONS'
+	option '-s' '(save) Set the primary remote to the one provided as an argument,
+		or else to the rediscovered default. Normal behavior.'
+	option '-n' '(noop) Do not set the primary remote, even if none is set.
+		Implies -e.'
+	option '-e' '(echo) print the primary branch when finished.'
+	option '-q' '(quiet) Supress echoing the priamry branch. Overrides .gitconfig
+		options funcs.verbose and funcs.refresh.verbose.'
+	option '-v' '(verbose) Print additional information. Overridden by -q.'
+	option '-h' '(help) Print this help'
+}
+
+case "$1" in
+	"help"|"-help"|"--help")
+		helpTxt
+		exit 0
+		;;
+esac
+
+e=0 q=0 setPrimary=0 noop=0 echoOn=0 v=0 noTerm=0
+while getopts ":hs:neqv" opt; do
+	case $opt in
+		h) helpTxt; exit 0 ;;
+		s) remoteArg=$OPTARG setPrimary=1 noop=0 ;;
+		n) noop=1 setPrimary=0 ;;
+		e) e=1; q=0 ;;
+		q) q=1; e=0 ;;
+		v) v=1 ;;
+		:)
+			echo >&2 "Option \`-$OPTARG\` requires an argument." \
+				"Run git refresh -h for help."
+			exit 1
+			;;
+		\?)
+			echo >&2 "Unknown option \`-$OPTARG\`. Run git refresh -h for help."
+			exit 1
+			;;
+	esac
+done
+shift $(expr $OPTIND - 1)
+
+# determines if stdout is not to a terminal (i.e. redirected to a pipe or file)
+[ ! -t 1 ] && noTerm=1
+
+# determine config defaults
+configValueOn -o -q "echo"    "refresh" && configEcho=1    || configEcho=0
+configValueOn -o -q "verbose" "refresh" && configVerbose=1 || configVerbose=0
+configPrimaryRemote=$(getPrimaryRemote -o)
+configPrimaryBranch=$(getPrimaryBranch -o)
+
+# determine if verbose
+if [ $q -eq 1 -o $noTerm -eq 1 ]; then
+	v=0
+elif [ $v -eq 0 ]; then
+	v=$configVerbose
+fi
+
+# Determine if output should be echoed
+if [ $q -eq 0 -a $v -eq 0 ] \
+	&& [ $e -eq 1 -o $noTerm -eq 0 -o $noop -eq 1 -o $configEcho -eq 1 ]
+then
+	echoOn=1
+fi
+
+# check positional argument for remote argument if not set by -s
+if [ -z $remoteArg ]; then remoteArg=$1; fi
+
+# print set options if v
+if [ $v -eq 1 ]; then
+	setOpts="v"
+
+	# set
+	[ $setPrimary -eq 1 ] && setOpts+=", set"
+
+	# noop
+	[ $noop -eq 1 ] && setOpts+=", noop"
+
+	# echo
+	if [ $echoOn -eq 1 ]; then
+		setOpts+=", echo ("
+		first=1
+		if [ $e -eq 1 ]; then
+			[ $first -eq 1 ] && first=0 || setOpts+=', '
+			setOpts+='-e'
+		fi
+		if [ $noTerm -eq 1 ]; then
+			[ $first -eq 1 ] && first=0 || setOpts+=', '
+			setOpts+='noTerm'
+		fi
+		if [ $configEcho -eq 1 ]; then
+			[ $first -eq 1 ] && first=0 || setOpts+=', '
+			setOpts+='config'
+		fi
+		setOpts+=')'
+	fi
+
+	# quiet
+	[ $q -eq 1 ] && setOpts+=", quiet"
+
+	# remoteArg
+	[ -n "$remoteArg" ] && setOpts+=", remote:$remoteArg"
+
+	echo "refresh with options: $setOpts"
+	[ -n "$configPrimaryRemote" ] && echo "\tfuncs.primaryRemote: ${configPrimaryRemote}"
+	[ -n "$configPrimaryBranch" ] && echo "\tfuncs.primaryBranch: ${configPrimaryBranch}"
+fi
+
+
+# redirect output of the next block
+[ $v -eq 1 ] && exec 4>&1 || exec 4>/dev/null
+{
+	autoRemote=$(git remote | head -n 1 )
+
+	remote=${remoteArg:-${configPrimaryRemote:-$autoRemote}}
+	if [ -z $remote ]; then
+		echo >&2 "this repository has no remote set"
+		exit 1
+	fi
+	[ $noop -eq 0 ] && git remote set-head $remote -a
+	git fetch --recurse-submodules=on-demand $remote
+	# get branch only from head: sed -E 's|^[^[:space:]/]*/||'
+	branch=$(git rev-parse --abbrev-ref "$remote/HEAD" | sed -E 's|^[^[:space:]/]*/||')
+
+	# Save remote and branch if necessary
+	if [ $noop -eq 0 ] && [ $setPrimary -eq 1 \
+		-o -z "$configPrimaryRemote" \
+		-o "$remote" != "$configPrimaryRemote" \
+		-o "$branch" != "$configPrimaryBranch" \
+	]; then
+		git config --local funcs.primaryRemote "$remote"
+		git config --local funcs.primaryBranch "$branch"
+		echo "funcs.primaryRemote set to $remote" \
+			"\nfuncs.primaryBranch set to $branch"
+	else
+		echo "primary remote: $remote\n  primary branch: $branch"
+	fi
+} >&4
+
+if [ $v -eq 0 ] && [ $echoOn -eq 1 ]; then echo "$remote/$branch"; fi
+

@@ -1,0 +1,56 @@
+#! /usr/bin/env sh
+
+set -e # errexit
+source "$(dirname "$0")/helpers"
+
+function helpTxt {
+	heading 'NAME'
+	body 'git-up - Rebase the local HEAD on the primary remote branch'
+
+	heading 'SYNOPSIS'
+	body 'git up [-q|-v] [<remote> [<refspec>]]'
+
+	heading 'DESCRIPTION'
+	body "Fetch the primary remote and rebase the local HEAD on it. If no
+	arguments are provided, it will use the saved primary and branch, but a remote
+	or remote and branch (or other valid ref) to pull from can be provided as
+	arguments to be passed to `git pull`. Any submodules will then be updated."
+
+	heading 'OPTIONS'
+	option '-q' '(quiet) Suppress output from git commands. Overrides .gitconfig
+		options funcs.verbose and funcs.refresh.verbose.'
+	option '-v' '(verbose) Print output from git commands'
+	option '-h' '(help) Print this help'
+}
+
+case "$1" in
+	"help"|"-help"|"--help")
+		helpTxt
+		exit 0
+		;;
+esac
+
+bo=0 ro=0 q=0 v=0;
+while getopts ":hqv" opt; do
+	case $opt in
+		h) helpTxt; exit 0 ;;
+		q) q=1; v=0; ;;
+		v) v=1 ;;
+		\?)
+			echo >&2 "Unknown option -$OPTARG. Run git primary -h for help."
+			exit 1
+			;;
+	esac
+done
+
+[ $q -eq 1 ] && v=0 || {
+	[ $v -eq 1 ] || configValueOn -o -q "verbose" "up" && v=1
+}
+
+# redirect output of the next block
+[ $q -eq 1 ] && exec 4>/dev/null || exec 4>&1
+{
+	git pull --rebase --autostash --prune ${@:OPTIND}
+	git submodule update --init --recursive
+} >&4
+

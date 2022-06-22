@@ -1,0 +1,54 @@
+#! /usr/bin/env sh
+
+set -e # errexit
+source "$(dirname "$0")/helpers"
+
+# Help text
+function helpTxt {
+	heading 'NAME'
+	body "git-label - Generate a label indicating the code version"
+
+	heading 'SYNOPSIS'
+	body "git label [<ref>]"
+
+	heading 'DESCRIPTION'
+	body "Generate a label that can be used as a build tag or in an application to
+	indicate which version of code the build is based on. The label is the branch
+	or tag name and the shortened commit hash, separated by a colon. This
+	combination identifies the ref needed to build the project again, and whether
+	a deployed build came from the expected branch (e.g. Is production running a
+	release? Is QA running a build of the main branch, or a deployed feature
+	branch? Is the build of the main branch in Staging the latest commit?)"
+	body "The label is generated for the current HEAD, unless another ref is given
+	as the first argument."
+
+	heading 'OPTIONS'
+	option '-h' 'Print this help'
+
+	echo "\n"
+}
+
+case "$1" in
+	"help"|"-help"|"--help")
+		helpTxt
+		exit 0
+		;;
+esac
+
+while getopts ":hr" opt; do
+	case $opt in
+		h) helpTxt; exit 0 ;;
+		\?)
+			echo >&2 "Unknown option -$OPTARG". \
+				'Run git label -h for help.'
+			exit 1
+			;;
+	esac
+done
+shift $(expr $OPTIND - 1)
+
+
+ref=${1:-'HEAD'}
+
+echo "$(git rev-parse --abbrev-ref ${ref}):$(git rev-parse --short ${ref})"
+
