@@ -20,6 +20,8 @@ function helpTxt {
 	-s <remote>."
 
 	heading 'OPTIONS'
+	option '-s' '(stash) Automatically stash uncommitted changes before checking
+	out the branch and pop after'
 	option '-q' '(quiet) Supress writing to stdout. Overrides .gitconfig
 		options funcs.verbose and funcs.refresh.verbose.'
 	option '-v' '(verbose) Print additional information'
@@ -35,31 +37,32 @@ case "$1" in
 		;;
 esac
 
-q=0 v=0
-while getopts ":hqv" opt; do
+s=0 q=0 v=0
+while getopts ":hsqv" opt; do
 	case $opt in
 		h) helpTxt; exit 0 ;;
-		q) q=1; e=0 ;;
+		s) s=0 ;;
+		q) q=1 v=0; ;;
 		v) v=1 ;;
 		\?)
-			echo >&2 "Unknown option -$OPTARG". \
-				'Run git remaster -h for help.'
+			echo >&2 "Unknown option -$OPTARG. Run git new-branch -h for help."
 			exit 1
 			;;
 	esac
 done
+shift $(expr $OPTIND - 1)
 
 [ $q -eq 1 ] && v=0 || {
 	[ $v -eq 1 ] || configValueOn -o -q "verbose" "co-primary" && v=1
 }
 
-branch=${@:OPTIND:1}
+branch=$1
 if [ -z "$branch" ]; then
 	echo >&2 "git new-branch requires 1 argument <new branch name>"
 	exit 1
 fi
 
-remote=${@:OPTIND+1:1}
+remote=$2
 remote=${remote:-$(git primary)}
 if [ -z "$remote" ]; then
 	echo >&2 "this repository has no remote set"
@@ -69,9 +72,15 @@ fi
 # redirect output of the next block
 [ $v -eq 1 ] && exec 4>&1 || exec 4>/dev/null
 {
-	git stash push && nopop=0 || nopop=1
+	# Check for uncommitted changes
+	if git diff-index --quiet HEAD; then dirty=1; else dirty=0; fi
+	if [ $dirty -eq 1 -a $s -eq 0 ]; then
+		echo >&2 'There are uncommitted changes. Commit or stash them, or use `-s`
+			to stash them automatically.'
+	fi
+	if [ $dirty -eq 1 ]; then git stash push; fi
 	git co-primary
 	git checkout -b $branch
-	if [ $nopop -eq 0 ]; then git stash pop; fi
+	if [ $dirty -eq 1 ]; then git stash pop; fi
 } >&4
 
