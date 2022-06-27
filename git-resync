@@ -62,9 +62,9 @@ fi
 remote=${primary%%/*}
 branch=${primary#*/}
 
-[ $q -eq 1 ] && v=0 || {
-	[ $v -eq 1 ] || configValueOn -o -q "verbose" "co-primary" && v=1
-}
+if [ $q -eq 1 ]; then v=0
+elif [ $v -eq 1 ] || configValueOn -o -q "verbose" "co-primary"; then v=1
+fi
 
 # redirect output of the next block
 [ $v -eq 1 ] && exec 4>&1 || exec 4>/dev/null
