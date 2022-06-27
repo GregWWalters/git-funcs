@@ -53,9 +53,9 @@ while getopts ":hqvbr" opt; do
 done
 shift $(expr $OPTIND - 1)
 
-[ $q -eq 1 ] && v=0 || {
-	[ $v -eq 1 ] || configValueOn -o -q "verbose" "primary" && v=1
-}
+if [ $q -eq 1 ]; then v=0
+elif [ $v -eq 1 ] || configValueOn -o -q "verbose" "primary"; then v=1
+fi
 
 remoteArg=$1
 if [ -n "$remoteArg" ]; then
@@ -64,18 +64,15 @@ if [ -n "$remoteArg" ]; then
 	exit 0
 fi
 
-dRemote=$(git config --local --get funcs.primaryRemote || :)
-dBranch=$(git config --local --get funcs.primaryBranch || :)
-if [ -z "$dRemote" -o -z "$dBranch" ]; then
+primary=$(getPrimary -o)
+if [ -z "$primary" ]; then
 	[ $v -eq 1 ] && echo "looking up primary remote and branch"
-	auto=$(git refresh -e)
-	remote=${auto%%/*}
-	branch=${auto#*/}
+	primary=$(git refresh -e)
 else
 	[ $v -eq 1 ] && echo "using primary branch from local git config"
-	remote=$dRemote
-	branch=$dBranch
 fi
+remote=${primary%%/*}
+branch=${primary#*/}
 
 if [ $ro -eq 1 -a $bo -eq 0 ]; then
 	echo $remote

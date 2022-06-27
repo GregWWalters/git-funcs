@@ -46,50 +46,59 @@ function option {
 	done
 }
 
-# Returns the remote set in the repository git config as a string. Exits 1 if
-# not found (unless `-o` is set)
-# getPrimaryRemote [-o]
-getPrimaryRemote() (
-	o=0
-	while getopts ":o" opt; do
+# Returns the remote and/or branch set in the repository git config as a string.
+# Exits 1 if not found (unless `-o` is set)
+# getPrimary [-q] [-o] [-r] [-b]
+getPrimary() (
+	q=0 o=0 r=0 b=0
+	while getopts ":qorb" opt; do
 		case $opt in
-			o) # error reporting off
-				o=1
-				;;
+			q) q=1 ;; # print nothing; return only found or not found via return code
+			o) o=1 ;; # error reporting off
+			r) r=1 ;; # print remote
+			b) b=1 ;; # print branch
 			\?)
 				echo >&2 "Unknown option -$OPTARG."
 				return 1
 				;;
 		esac
 	done
-	remote=$(git config --local --get funcs.defaultRemote || :)
-	echo $remote
-	if [ $o -eq 0 ]; then [ -n $remote ]; fi
+
+	if [ $r -eq 0 -a $b -eq 0 ]; then r=1 b=1; fi
+	if [ $q -eq 1 ]; then exec 1>/dev/null; fi
+	remote=$(git config --local --get funcs.primaryRemote || :)
+	branch=$(git config --local --get funcs.primaryBranch || :)
+	if [ $r -eq 1 -a $b -eq 1 ]; then
+		echo "${remote}/${branch}"
+		if [ $o -eq 0 ]; then [ -n "$remote" -a -n "$branch" ]; fi
+	elif [ $r -eq 1 ]; then
+		echo $remote
+		if [ $o -eq 0 ]; then [ -n "$remote" ]; fi
+	elif [ $b -eq 1 ]; then
+		echo $branch
+		if [ $o -eq 0 ]; then [ -n "$branch" ]; fi
+	fi
+)
+
+# Returns the remote set in the repository git config as a string. Exits 1 if
+# not found (unless `-o` is set). getPrimaryRemote is an alias for 'getPrimary
+# -r'
+# getPrimaryRemote [-o]
+getPrimaryRemote() (
+	getPrimary -r $@
 )
 
 # Returns the branch set in the repository git config as a string. Exits 1 if
-# not found (unless `-o` is set)
+# not found (unless `-o` is set). getPrimaryBranch is an alias for 'getPrimary
+# -b'
 # getPrimaryBranch [-o]
 getPrimaryBranch() (
-	o=0
-	while getopts ":o" opt; do
-		case $opt in
-			o) # error reporting off
-				o=1
-				;;
-			\?)
-				echo >&2 "Unknown option -$OPTARG."
-				return 1
-				;;
-		esac
-	done
-	branch=$(git config --local --get funcs.defaultBranch || :)
-	echo $branch
-	if [ $o -eq 0 ]; then [ -n $branch ]; fi
+	getPrimary -b $@
 )
 
 # configValueOn returns whether a git config value is set to true
-# configValueOn [-q|-e] [-o] [-k <key>] [-c <command>] <key> [<command>]
+# configValueOn [-q|-e] [-o] <key> [<command>]
+# configValueOn [-q|-e] [-o] -k <key> [-c <command>]
 configValueOn() (
 	q=1 echo=0 o=0
 	while getopts ":qeok:f:" opt; do
