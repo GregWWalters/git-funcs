@@ -73,8 +73,9 @@ fi
 	# Check for uncommitted changes
 	if git diff-index --quiet HEAD; then dirty=1; else dirty=0; fi
 	if [ $dirty -eq 1 -a $s -eq 0 ]; then
-		echo >&2 'There are uncommitted changes. Commit or stash them, or use `-s`
-			to stash them automatically.'
+		echo >&2 'There are uncommitted changes. Commit or stash them, ' \
+			'or use `-s` to stash them automatically.'
+		exit 1
 	fi
 	if [ $dirty -eq 1 ]; then git stash push; fi
 	git fetch $(echo $remote | cut -d '/' -f1 )
