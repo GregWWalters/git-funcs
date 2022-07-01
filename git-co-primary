@@ -71,7 +71,7 @@ fi
 	echo "checking out primary branch from primary remote $remote"
 
 	# Check for uncommitted changes
-	if git diff-index --quiet HEAD; then dirty=1; else dirty=0; fi
+	if git diff-index --quiet HEAD; then dirty=0; else dirty=1; fi
 	if [ $dirty -eq 1 -a $s -eq 0 ]; then
 		echo >&2 'There are uncommitted changes. Commit or stash them, ' \
 			'or use `-s` to stash them automatically.'
