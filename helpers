@@ -6,7 +6,7 @@ function testInteger {
 
 termWidth() (
 	if command stty &>/dev/null; then
-		w=$(stty size | cut -w -f2)
+		w=$(stty size | cut -d' ' -f2)
 	elif command tput &>/dev/null; then
 		w=$(tput cols)
 	else
