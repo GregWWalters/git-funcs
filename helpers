@@ -68,6 +68,9 @@ getPrimary() (
 	if [ $q -eq 1 ]; then exec 1>/dev/null; fi
 	remote=$(git config --local --get funcs.primaryRemote || :)
 	branch=$(git config --local --get funcs.primaryBranch || :)
+	if [ -z "$remote" -a $r -eq 1 ] || [ -z "$branch" -a $b -eq 1 ]; then
+		[$o -eq 1 ] && return 0 || else return 1
+	fi;
 	if [ $r -eq 1 -a $b -eq 1 ]; then
 		echo "${remote}/${branch}"
 		if [ $o -eq 0 ]; then [ -n "$remote" -a -n "$branch" ]; fi

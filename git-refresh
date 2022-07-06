@@ -45,10 +45,12 @@ case "$1" in
 esac
 
 e=0 q=0 setPrimary=0 noop=0 echoOn=0 v=0 noTerm=0
-while getopts ":hs:neqv" opt; do
+while getopts ":hsneqv" opt; do
 	case $opt in
 		h) helpTxt; exit 0 ;;
-		s) remoteArg=$OPTARG setPrimary=1 noop=0 ;;
+		s) setPrimary=1 noop=0
+			if [ -n "$OPTARG" -a "${OPTARG:0:1}" != '-' ]; then remoteArg=$OPTARG; fi
+				;;
 		n) noop=1 setPrimary=0 ;;
 		e) e=1; q=0 ;;
 		q) q=1; e=0 ;;
