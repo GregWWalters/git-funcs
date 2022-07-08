@@ -27,7 +27,7 @@ indent() (
 )
 
 function heading {
-	indent 2 "$*"
+	indent 2 "\033[1m$*\033[0m"
 }
 
 function body {
@@ -69,7 +69,7 @@ getPrimary() (
 	remote=$(git config --local --get funcs.primaryRemote || :)
 	branch=$(git config --local --get funcs.primaryBranch || :)
 	if [ -z "$remote" -a $r -eq 1 ] || [ -z "$branch" -a $b -eq 1 ]; then
-		if [$o -eq 1 ]; then return 0; else return 1; fi
+		if [ $o -eq 1 ]; then return 0; else return 1; fi
 	fi;
 	if [ $r -eq 1 -a $b -eq 1 ]; then
 		echo "${remote}/${branch}"
