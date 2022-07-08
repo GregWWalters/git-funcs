@@ -1,0 +1,83 @@
+#! /usr/bin/env sh
+
+set -e # errexit
+source "$(dirname "$0")/helpers"
+
+# Help text
+function helpTxt {
+	heading 'NAME'
+  body "git-deep-commit-all - commit all modified files in this repo and all
+  submodules"
+
+	heading 'SYNOPSIS'
+	body "git deep-commit-all [-q] [-m] <commit-message>"
+
+	heading 'DESCRIPTION'
+	body "Provide a commit message, and all modified files in all submodules will
+	be committed with that message. All modified files in this repo will then be
+	committed with the updated submodules with the same message."
+
+	heading 'OPTIONS'
+	option '-h' 'print this help'
+	option '-q' '(quiet) silence output'
+	option '-n' '(dry run) print what results would be, but do not commit'
+	option '-m' 'provide commit message as an option instead of a positional
+	option '-p' 'push changes after committing'
+	parameter'
+
+	echo "\n"
+}
+
+case "$1" in
+	"help"|"-help"|"--help")
+		helpTxt
+		exit 0
+		;;
+esac
+
+q=0 dr=0 p=0 message=''
+while getopts ":hqnpm:" opt; do
+	case $opt in
+		h) helpTxt; exit 0 ;;
+		q) q=1 ;;
+		n) dr=1 ;;
+		p) p=1 ;;
+		m) message=$OPTARG ;;
+		:)
+			echo >&2 "Option \`-$OPTARG\` requires an argument." \
+				"Run git refresh -h for help."
+			exit 1
+			;;
+		\?)
+			echo >&2 "Unknown option -$OPTARG". \
+				'Run git label -h for help.'
+			exit 1
+			;;
+	esac
+done
+shift $(expr $OPTIND - 1)
+
+
+if [ -z "$message" ]; then
+	message=$1
+	if [ -z "$message" ] && [ $dr -eq 0 ]; then
+		echo >&2 "Must provide a commit message"
+		exit 1
+	fi
+fi
+
+dryOpt=''
+if [ $dr -eq 1 ]; then dryOptL='--dry-run'; dryOptS='-n'; fi
+
+# redirect output of the next block
+if [ $q -eq 1 ]; then exec 4>/dev/null; else exec 4>&1; fi
+{
+	git submodule foreach git deep-commit-all $dryOptS -m "$message" || :
+	for mod in $(git submodule status | grep '^+' | cut -d' ' -f2); do
+		git add $mod
+	done
+	git commit $dryOptL -am "$message"
+	git push $dryOptL || :
+} >&4
+
+# vim:ft=sh
