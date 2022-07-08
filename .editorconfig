@@ -1,0 +1,17 @@
+# EditorConfig is awesome: https://EditorConfig.org
+
+[*]
+end_of_line = lf
+trim_trailing_whitespace = true
+charset = utf-8
+indent_style = space
+indent_size = 2
+
+[*.sh]
+indent_style = tab
+insert_final_newline = false
+
+[{*.md,*.mkd}]
+indent_style = space
+indent_size = 2
+
