@@ -73,14 +73,16 @@ fi
 [ $v -eq 1 ] && exec 4>&1 || exec 4>/dev/null
 {
 	# Check for uncommitted changes
-	if git diff-index --quiet HEAD; then dirty=1; else dirty=0; fi
-	if [ $dirty -eq 1 -a $s -eq 0 ]; then
-		echo >&2 'There are uncommitted changes. Commit or stash them, or use `-s`
-			to stash them automatically.'
+	# if git diff-index --quiet HEAD; then dirty=1; else dirty=0; fi
+  modified=$(git status --porcelain -uno | wc -l)
+	if [ $modified -gt 0 -a $s -eq 0 ]; then
+		echo >&2 'There are uncommitted changes. Commit or stash them, or use `-s`' \
+			'to stash them automatically.'
+    exit 1
 	fi
-	if [ $dirty -eq 1 ]; then git stash push; fi
+	if [ $modified -gt 0 ]; then git stash push; fi
 	git co-primary
 	git checkout -b $branch
-	if [ $dirty -eq 1 ]; then git stash pop; fi
+	if [ $modified -gt 0 ]; then git stash pop; fi
 } >&4
 
