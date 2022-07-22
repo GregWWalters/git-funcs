@@ -1,9 +1,9 @@
 #! /usr/bin/env sh
 
 set -e # errexit
-source "$(dirname "$0")/helpers"
+. "$(dirname "$0")/helpers"
 
-function helpTxt {
+helpTxt() {
 	heading 'NAME'
 	body 'git-up - Rebase the local HEAD on the primary remote branch'
 

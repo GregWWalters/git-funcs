@@ -1,10 +1,10 @@
 #! /usr/bin/env sh
 
 set -e # errexit
-source "$(dirname "$0")/helpers"
+. "$(dirname "$0")/helpers"
 
 # Help text
-function helpTxt {
+helpTxt() {
 	heading 'NAME'
 	body "git-new-branch - Create a new branch based on the remote's latest HEAD"
 

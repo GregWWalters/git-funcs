@@ -3,9 +3,9 @@
 # TODO: allow saving multiple primaries?
 
 set -e # errexit
-source "$(dirname "$0")/helpers"
+. "$(dirname "$0")/helpers"
 
-function helpTxt {
+helpTxt() {
 	heading 'NAME'
 	body 'git-refresh - Determine the primary branch for new branches and rebasing'
 
