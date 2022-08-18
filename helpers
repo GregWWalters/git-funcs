@@ -122,9 +122,10 @@ configValueOn() (
 				;;
 		esac
 	done
+  shift $(expr $OPTIND - 1)
 
-	key=${key:-${@:OPTIND:1}}
-	func=${func:-${@:OPTIND+1:1}}
+	key=${key:-$1}
+	func=${func:-$2}
 	if [ -z "$key" ]; then
 		echo >&2 "configValueOn requires the name of the key"
 		return 1

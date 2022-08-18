@@ -42,6 +42,7 @@ while getopts ":hqv" opt; do
 			;;
 	esac
 done
+shift $(expr $OPTIND - 1)
 
 [ $q -eq 1 ] && v=0 || {
 	[ $v -eq 1 ] || configValueOn -o -q "verbose" "up" && v=1
@@ -50,7 +51,7 @@ done
 # redirect output of the next block
 [ $q -eq 1 ] && exec 4>/dev/null || exec 4>&1
 {
-	git pull --rebase --autostash --prune ${@:OPTIND}
+	git pull --rebase --autostash --prune $@
 	git submodule update --init --recursive
 } >&4
 

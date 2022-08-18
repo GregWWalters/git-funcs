@@ -41,7 +41,7 @@ s=0 q=0 v=0
 while getopts ":hsqv" opt; do
 	case $opt in
 		h) helpTxt; exit 0 ;;
-		s) s=0 ;;
+		s) s=1 ;;
 		q) q=1 v=0; ;;
 		v) v=1 ;;
 		\?)

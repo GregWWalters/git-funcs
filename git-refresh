@@ -49,7 +49,7 @@ while getopts ":hsneqv" opt; do
 	case $opt in
 		h) helpTxt; exit 0 ;;
 		s) setPrimary=1 noop=0
-			if [ -n "$OPTARG" -a "${OPTARG:0:1}" != '-' ]; then remoteArg=$OPTARG; fi
+      if [ -n "$OPTARG" -a -n "${OPTARG##-*}" ]; then remoteArg=$OPTARG; fi
 				;;
 		n) noop=1 setPrimary=0 ;;
 		e) e=1; q=0 ;;
