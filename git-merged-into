@@ -58,10 +58,10 @@ descendant=${2:-$(git primary)}
 if git merge-base --is-ancestor "$ancestor" "$descendant"; then
 	[ $v -eq 1 ] \
 		&& echo "$ancestor merged into $descendant" \
-		|| return 0
+		|| exit 0
 else
-	[ $v -eq 1] \
+	[ $v -eq 1 ] \
 		&& echo "$ancestor not merged into $descendant" \
-		|| return 1
+		|| exit 1
 fi
 
