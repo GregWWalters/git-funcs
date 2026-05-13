@@ -38,7 +38,7 @@ the command, its options, and arguments.
 
 #### option `-v` (verbose)
 
-The `-v` flag turns prints additional information, such as the output from
+The `-v` flag prints additional information, such as the output from
 the used `git` commands and whether provided or default values are used. It
 is not meant to be used as input to other commands. Overidden by `-q`.
 
@@ -109,8 +109,8 @@ Show the remote and branch that feature branches should be based on. If
 `<remote>` is provided, it will show the primary branch for that remote instead
 of the primary remote. Otherwise, it will first check the repository's
 configuration for the primary remote, and if not found, return the first
-remote assiciated with the repository. To change the primary remote, use
-`git-refesh -s <remote>`.
+remote associated with the repository. To change the primary remote, use
+`git-refresh -s <remote>`.
 
 * `-r` (remote) Print primary remote only
 * `-q` (quiet) Print nothing to stdout
@@ -130,7 +130,7 @@ re-applied after.
 	branch and pop after
 * `-q`, (quiet) Print nothing to stdout. Overrides .gitconfig options
 	funcs.verbose and funcs.refresh.verbose.
-* `-v` (verbse) Print additional information
+* `-v` (verbose) Print additional information
 * `-h` (help) Print help.
 
 ### new-branch
@@ -141,7 +141,7 @@ Create a new branch with <branch-name> based on the remote's HEAD. If
 <remote> is provided, it will use the primary branch for that remote instead
 of the primary remote. Otherwise, it will first check the repository's
 configuration for the primary remote, and if not found, use the first remote
-assiciated with the repository. To change the primary remote, use git-refesh
+associated with the repository. To change the primary remote, use git-refresh
 -s <remote>.
 
 * `-q` (quiet) Supress writing to stdout. Overrides .gitconfig funcs.verbose and funcs.refresh.verbose.
@@ -156,12 +156,12 @@ Fetch the latest HEAD from this repository's remote and rebase the local HEAD
 on it. If <remote> is provided, it will show the primary branch for that
 remote instead of the primary remote. Otherwise, it will first check the
 repository's configuration for the primary remote, and if not found, return
-the first remote assiciated with the repository. To change the primary
-remote, use `git-refesh -s <remote>`."
+the first remote associated with the repository. To change the primary
+remote, use `git-refresh -s <remote>`."
 
 * `-q` (quiet) Print nothing to stdout. Overrides .gitconfig options
 	funcs.verbose and funcs.refresh.verbose.
-* `-v` (verbse) Print output from git commands
+* `-v` (verbose) Print output from git commands
 * `-h` (help) Print help.
 
 ### up
@@ -212,4 +212,36 @@ it will also print out the result.'
 	returning 0 if the first branch is merged into the second or 1 if not.
 * `-v` (verbose) Print additional information (default)
 * `-h` (help) Print this help.
+
+### sweep
+
+`git sweep [-n] [-w] [-t <target>] [-q|-v]`
+
+Find and delete local branches whose changes are fully present in the
+target branch. Unlike `git branch --merged`, this detects rebase-merges
+and squash-merges by simulating a merge and comparing the resulting tree.
+
+For each deleted branch, prints the branch name and head commit to stdout.
+Branches checked out in worktrees are skipped unless `-w` is set.
+
+* `-n` (dry-run) Show what would be deleted without deleting.
+* `-w` (worktrees) Also remove worktrees for merged branches.
+* `-t <target>` Branch or ref to compare against (default: primary
+	remote/branch).
+* `-q` (quiet) Suppress informational output.
+* `-v` (verbose) Print additional information.
+
+### deep-commit-all
+
+`git deep-commit-all [-q] [-n] [-p] [-m] <commit-message>`
+
+Commit all modified files in this repo and all submodules. Provide a commit
+message, and all modified files in all submodules will be committed with
+that message. All modified files in this repo will then be committed with
+the updated submodules using the same message.
+
+* `-n` (dry-run) Print what results would be, but do not commit.
+* `-p` (push) Push changes after committing.
+* `-m` Provide commit message as an option instead of a positional parameter.
+* `-q` (quiet) Silence output.
 
