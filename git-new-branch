@@ -16,14 +16,14 @@ helpTxt() {
 	<remote> is provided, it will use the primary branch for that remote instead
 	of the primary remote. Otherwise, it will first check the repository's
 	configuration for the primary remote, and if not found, use the first remote
-	assiciated with the repository. To change the primary remote, use git-refesh
+	associated with the repository. To change the primary remote, use git-refresh
 	-s <remote>."
 
 	heading 'OPTIONS'
 	option '-s' '(stash) Automatically stash uncommitted changes before checking
 	out the branch and pop after'
-	option '-q' '(quiet) Supress writing to stdout. Overrides .gitconfig
-		options funcs.verbose and funcs.refresh.verbose.'
+	option '-q' '(quiet) Suppress writing to stdout. Overrides .gitconfig
+		options funcs.verbose and funcs.new-branch.verbose.'
 	option '-v' '(verbose) Print additional information'
 	option '-h' '(help) Print this help'
 
@@ -52,9 +52,11 @@ while getopts ":hsqv" opt; do
 done
 shift $(expr $OPTIND - 1)
 
-[ $q -eq 1 ] && v=0 || {
-	[ $v -eq 1 ] || configValueOn -o -q "verbose" "co-primary" && v=1
-}
+if [ $q -eq 1 ]; then
+	v=0
+elif [ $v -eq 1 ] || configValueOn -o -q "verbose" "new-branch"; then
+	v=1
+fi
 
 branch=$1
 if [ -z "$branch" ]; then
@@ -73,16 +75,15 @@ fi
 [ $v -eq 1 ] && exec 4>&1 || exec 4>/dev/null
 {
 	# Check for uncommitted changes
-	# if git diff-index --quiet HEAD; then dirty=1; else dirty=0; fi
-  modified=$(git status --porcelain -uno | wc -l)
-	if [ $modified -gt 0 -a $s -eq 0 ]; then
+	modified=$(git status --porcelain -uno | wc -l)
+	if [ "$modified" -gt 0 ] && [ $s -eq 0 ]; then
 		echo >&2 'There are uncommitted changes. Commit or stash them, or use `-s`' \
 			'to stash them automatically.'
-    exit 1
+		exit 1
 	fi
-	if [ $modified -gt 0 ]; then git stash push; fi
+	if [ "$modified" -gt 0 ]; then git stash push; fi
 	git co-primary
-	git checkout -b $branch
-	if [ $modified -gt 0 ]; then git stash pop; fi
+	git checkout -b "$branch"
+	if [ "$modified" -gt 0 ]; then git stash pop; fi
 } >&4
 

@@ -21,8 +21,8 @@ helpTxt() {
 	option '-h' 'print this help'
 	option '-q' '(quiet) silence output'
 	option '-n' '(dry run) print what results would be, but do not commit'
-	option '-m' 'provide commit message as an option instead of a positional
 	option '-p' 'push changes after committing'
+	option '-m' 'provide commit message as an option instead of a positional
 	parameter'
 
 	echo "\n"
@@ -45,12 +45,12 @@ while getopts ":hqnpm:" opt; do
 		m) message=$OPTARG ;;
 		:)
 			echo >&2 "Option \`-$OPTARG\` requires an argument." \
-				"Run git refresh -h for help."
+				"Run git deep-commit-all -h for help."
 			exit 1
 			;;
 		\?)
-			echo >&2 "Unknown option -$OPTARG". \
-				'Run git label -h for help.'
+			echo >&2 "Unknown option -$OPTARG." \
+				'Run git deep-commit-all -h for help.'
 			exit 1
 			;;
 	esac
@@ -66,7 +66,7 @@ if [ -z "$message" ]; then
 	fi
 fi
 
-dryOpt=''
+dryOptL='' dryOptS=''
 if [ $dr -eq 1 ]; then dryOptL='--dry-run'; dryOptS='-n'; fi
 
 # redirect output of the next block
@@ -74,10 +74,10 @@ if [ $q -eq 1 ]; then exec 4>/dev/null; else exec 4>&1; fi
 {
 	git submodule foreach git deep-commit-all $dryOptS -m "$message" || :
 	for mod in $(git submodule status | grep '^+' | cut -d' ' -f2); do
-		git add $mod
+		git add "$mod"
 	done
 	git commit $dryOptL -am "$message"
-	git push $dryOptL || :
+	if [ $p -eq 1 ]; then git push $dryOptL || :; fi
 } >&4
 
 # vim:ft=sh

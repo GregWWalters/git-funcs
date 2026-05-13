@@ -16,9 +16,6 @@ helpTxt() {
 	body 'Determine the branch that feature branches should be based on. The -e
 	and -q options and the -s and -n options will override each other, and
 	whichever is last takes precedence.'
-	body 'Determine the branch that feature branches should be based on. The -e and -q
-	options and the -s and -n options will override each other, and whichever is
-	last takes precedence.'
 	body 'If neither -e nor -q are set, refresh will check git configuration files and
 	echo if funcs.refresh.echo or funcs.echo is true.'
 	body "If neither -s nor -n are set, refresh will check the repository's git
@@ -31,7 +28,7 @@ helpTxt() {
 	option '-n' '(noop) Do not set the primary remote, even if none is set.
 		Implies -e.'
 	option '-e' '(echo) print the primary branch when finished.'
-	option '-q' '(quiet) Supress echoing the priamry branch. Overrides .gitconfig
+	option '-q' '(quiet) Suppress echoing the primary branch. Overrides .gitconfig
 		options funcs.verbose and funcs.refresh.verbose.'
 	option '-v' '(verbose) Print additional information. Overridden by -q.'
 	option '-h' '(help) Print this help'
@@ -92,46 +89,46 @@ then
 fi
 
 # check positional argument for remote argument if not set by -s
-if [ -z $remoteArg ]; then remoteArg=$1; fi
+if [ -z "$remoteArg" ]; then remoteArg=$1; fi
 
 # print set options if v
 if [ $v -eq 1 ]; then
 	setOpts="v"
 
 	# set
-	[ $setPrimary -eq 1 ] && setOpts+=", set"
+	[ $setPrimary -eq 1 ] && setOpts="$setOpts, set"
 
 	# noop
-	[ $noop -eq 1 ] && setOpts+=", noop"
+	[ $noop -eq 1 ] && setOpts="$setOpts, noop"
 
 	# echo
 	if [ $echoOn -eq 1 ]; then
-		setOpts+=", echo ("
+		setOpts="$setOpts, echo ("
 		first=1
 		if [ $e -eq 1 ]; then
-			[ $first -eq 1 ] && first=0 || setOpts+=', '
-			setOpts+='-e'
+			[ $first -eq 1 ] && first=0 || setOpts="$setOpts, "
+			setOpts="${setOpts}-e"
 		fi
 		if [ $noTerm -eq 1 ]; then
-			[ $first -eq 1 ] && first=0 || setOpts+=', '
-			setOpts+='noTerm'
+			[ $first -eq 1 ] && first=0 || setOpts="$setOpts, "
+			setOpts="${setOpts}noTerm"
 		fi
 		if [ $configEcho -eq 1 ]; then
-			[ $first -eq 1 ] && first=0 || setOpts+=', '
-			setOpts+='config'
+			[ $first -eq 1 ] && first=0 || setOpts="$setOpts, "
+			setOpts="${setOpts}config"
 		fi
-		setOpts+=')'
+		setOpts="$setOpts)"
 	fi
 
 	# quiet
-	[ $q -eq 1 ] && setOpts+=", quiet"
+	[ $q -eq 1 ] && setOpts="$setOpts, quiet"
 
 	# remoteArg
-	[ -n "$remoteArg" ] && setOpts+=", remote:$remoteArg"
+	[ -n "$remoteArg" ] && setOpts="$setOpts, remote:$remoteArg"
 
 	echo "refresh with options: $setOpts"
-	[ -n "$configPrimaryRemote" ] && echo "\tfuncs.primaryRemote: ${configPrimaryRemote}"
-	[ -n "$configPrimaryBranch" ] && echo "\tfuncs.primaryBranch: ${configPrimaryBranch}"
+	[ -n "$configPrimaryRemote" ] && printf '\tfuncs.primaryRemote: %s\n' "$configPrimaryRemote"
+	[ -n "$configPrimaryBranch" ] && printf '\tfuncs.primaryBranch: %s\n' "$configPrimaryBranch"
 fi
 
 
@@ -141,13 +138,13 @@ fi
 	autoRemote=$(git remote | head -n 1 )
 
 	remote=${remoteArg:-${configPrimaryRemote:-$autoRemote}}
-	if [ -z $remote ]; then
+	if [ -z "$remote" ]; then
 		echo >&2 "this repository has no remote set"
 		exit 1
 	fi
-	if [ $noop -eq 0 ]; then git remote set-head $remote -a; fi
+	if [ $noop -eq 0 ]; then git remote set-head "$remote" -a; fi
 	git submodule sync --recursive
-	git fetch --recurse-submodules=on-demand $remote
+	git fetch --recurse-submodules=on-demand "$remote"
 	# get branch only from head: sed -E 's|^[^[:space:]/]*/||'
 	branch=$(git rev-parse --abbrev-ref "$remote/HEAD" | sed -E 's|^[^[:space:]/]*/||')
 
@@ -159,10 +156,10 @@ fi
 	]; then
 		git config --local funcs.primaryRemote "$remote"
 		git config --local funcs.primaryBranch "$branch"
-		echo "funcs.primaryRemote set to $remote" \
-			"\nfuncs.primaryBranch set to $branch"
+		printf 'funcs.primaryRemote set to %s\nfuncs.primaryBranch set to %s\n' \
+			"$remote" "$branch"
 	else
-		echo "primary remote: $remote\n  primary branch: $branch"
+		printf 'primary remote: %s\n  primary branch: %s\n' "$remote" "$branch"
 	fi
 } >&4
 

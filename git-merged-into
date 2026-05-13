@@ -22,7 +22,7 @@ helpTxt() {
 	result.'
 
 	heading 'OPTIONS'
-	option '-q', '(quiet) Write nothing to stdout and use the exit status instead,
+	option '-q' '(quiet) Write nothing to stdout and use the exit status instead,
 		returning 0 if the first branch is merged into the second or 1 if not.'
 	option '-v' '(verbose) Print additional information (default)'
 	option '-h' '(help) Print this help.'
@@ -41,7 +41,7 @@ while getopts ":hqv" opt; do
 		q) q=1 v=0; ;;
 		v) v=1 ;;
 		\?)
-			echo >&2 "Unknown option -$OPTARG. Run git co-primary -h for help."
+			echo >&2 "Unknown option -$OPTARG. Run git merged-into -h for help."
 			exit 1
 			;;
 	esac

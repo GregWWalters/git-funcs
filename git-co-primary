@@ -20,9 +20,9 @@ helpTxt() {
 	heading 'OPTIONS'
 	option '-s' '(stash) Automatically stash uncommitted changes before checking
 	out the branch and pop after'
-	option '-q', '(quiet) Print nothing to stdout. Overrides .gitconfig options
+	option '-q' '(quiet) Print nothing to stdout. Overrides .gitconfig options
 	funcs.verbose and funcs.refresh.verbose.'
-	option '-v' '(verbse) Print additional information'
+	option '-v' '(verbose) Print additional information'
 	option '-h' '(help) Print this help.'
 }
 
@@ -57,29 +57,30 @@ fi
 # redirect output of the next block
 [ $v -eq 1 ] && exec 4>&1 || exec 4>/dev/null
 {
-	remote=$1
-	if [ -n "$remote" ]; then
-		echo "checking out primary branch from remote $remote"
+	remoteArg=$1
+	if [ -n "$remoteArg" ]; then
+		echo "checking out primary branch from remote $remoteArg"
 	fi
 
-	remote=${remote:-$(git primary)}
-	if [ -z "$remote" ]; then
+	primary=${remoteArg:-$(git primary)}
+	if [ -z "$primary" ]; then
 		echo >&2 "this repository has no remote set"
 		exit 1
 	fi
 
-	echo "checking out primary branch from primary remote $remote"
+	remote=${primary%%/*}
+	echo "checking out primary branch from primary remote $primary"
 
 	# Check for uncommitted changes
 	if git diff-index --quiet HEAD; then dirty=0; else dirty=1; fi
-	if [ $dirty -eq 1 -a $s -eq 0 ]; then
+	if [ $dirty -eq 1 ] && [ $s -eq 0 ]; then
 		echo >&2 'There are uncommitted changes. Commit or stash them, ' \
 			'or use `-s` to stash them automatically.'
 		exit 1
 	fi
 	if [ $dirty -eq 1 ]; then git stash push; fi
-	git fetch $(echo $remote | cut -d '/' -f1 )
-	git checkout $remote
+	git fetch "$remote"
+	git checkout "$primary"
 	if [ $dirty -eq 1 ]; then git stash pop; fi
 } >&4
 

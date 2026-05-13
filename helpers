@@ -1,18 +1,18 @@
 # git custom command helper functions
 
 testInteger() {
-	[ -n "$1" -a  "$1" -eq "$1" ] 2>/dev/null
+	[ -n "$1" ] && [ "$1" -eq "$1" ] 2>/dev/null
 }
 
 termWidth() (
-	if command stty &>/dev/null; then
+	if command -v stty >/dev/null 2>&1; then
 		w=$(stty size | cut -d' ' -f2)
-	elif command tput &>/dev/null; then
+	elif command -v tput >/dev/null 2>&1; then
 		w=$(tput cols)
 	else
 		return 1
 	fi
-	echo $w
+	echo "$w"
 )
 
 indent() (
@@ -22,8 +22,8 @@ indent() (
 	}
 	space=$1; shift
 	maxWidth=$(termWidth) || maxWidth=60
-	width=$(expr $maxWidth - $space)
-	[ $# -gt 0 ] && echo $* | fold -sw $width | pr -to $space
+	width=$(expr "$maxWidth" - "$space")
+	[ $# -gt 0 ] && printf '%s\n' "$*" | fold -sw "$width" | pr -to "$space"
 )
 
 heading() {
@@ -64,21 +64,21 @@ getPrimary() (
 		esac
 	done
 
-	if [ $r -eq 0 -a $b -eq 0 ]; then r=1 b=1; fi
+	if [ $r -eq 0 ] && [ $b -eq 0 ]; then r=1 b=1; fi
 	if [ $q -eq 1 ]; then exec 1>/dev/null; fi
 	remote=$(git config --local --get funcs.primaryRemote || :)
 	branch=$(git config --local --get funcs.primaryBranch || :)
-	if [ -z "$remote" -a $r -eq 1 ] || [ -z "$branch" -a $b -eq 1 ]; then
+	if { [ -z "$remote" ] && [ $r -eq 1 ]; } || { [ -z "$branch" ] && [ $b -eq 1 ]; }; then
 		if [ $o -eq 1 ]; then return 0; else return 1; fi
 	fi;
-	if [ $r -eq 1 -a $b -eq 1 ]; then
+	if [ $r -eq 1 ] && [ $b -eq 1 ]; then
 		echo "${remote}/${branch}"
-		if [ $o -eq 0 ]; then [ -n "$remote" -a -n "$branch" ]; fi
+		if [ $o -eq 0 ]; then [ -n "$remote" ] && [ -n "$branch" ]; fi
 	elif [ $r -eq 1 ]; then
-		echo $remote
+		echo "$remote"
 		if [ $o -eq 0 ]; then [ -n "$remote" ]; fi
 	elif [ $b -eq 1 ]; then
-		echo $branch
+		echo "$branch"
 		if [ $o -eq 0 ]; then [ -n "$branch" ]; fi
 	fi
 )
@@ -88,7 +88,7 @@ getPrimary() (
 # -r'
 # getPrimaryRemote [-o]
 getPrimaryRemote() (
-	getPrimary -r $@
+	getPrimary -r "$@"
 )
 
 # Returns the branch set in the repository git config as a string. Exits 1 if
@@ -96,7 +96,7 @@ getPrimaryRemote() (
 # -b'
 # getPrimaryBranch [-o]
 getPrimaryBranch() (
-	getPrimary -b $@
+	getPrimary -b "$@"
 )
 
 # configValueOn returns whether a git config value is set to true
@@ -133,8 +133,8 @@ configValueOn() (
 
 	[ -n "$func" ] && \
 		val=$(git config --get --type=bool "funcs.$func.$key" || :)
-	[ -z "$val" ]&& \
-		$(git config --get --type=bool "funcs.$key" || :)
+	[ -z "$val" ] && \
+		val=$(git config --get --type=bool "funcs.$key" || :)
 
 	if [ $q -eq 1 ]; then
 		[ "$val" = "true" ]

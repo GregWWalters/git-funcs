@@ -16,13 +16,13 @@ helpTxt() {
 	HEAD on it. If <remote> is provided, it will show the primary branch for that
 	remote instead of the primary remote."
 	body "Otherwise, it will first check the repository's configuration for the
-	primary remote, and if not found, return the first remote assiciated with the
+	primary remote, and if not found, return the first remote associated with the
 	repository."
-	body "To change the primary remote, use git-refesh -s <remote>."
+	body "To change the primary remote, use git-refresh -s <remote>."
 
 	heading 'OPTIONS'
-	option '-q' '(quiet) Supress writing to stdout. Overrides .gitconfig
-		options funcs.verbose and funcs.refresh.verbose.'
+	option '-q' '(quiet) Suppress writing to stdout. Overrides .gitconfig
+		options funcs.verbose and funcs.resync.verbose.'
 	option '-v' '(verbose) Print additional information'
 	option '-h' 'Print this help'
 
@@ -40,7 +40,7 @@ q=0 v=0
 while getopts ":hqv" opt; do
 	case $opt in
 		h) helpTxt; exit 0 ;;
-		q) q=1; e=0 ;;
+		q) q=1; v=0 ;;
 		v) v=1 ;;
 		\?)
 			echo >&2 "Unknown option -$OPTARG". \
@@ -63,13 +63,13 @@ remote=${primary%%/*}
 branch=${primary#*/}
 
 if [ $q -eq 1 ]; then v=0
-elif [ $v -eq 1 ] || configValueOn -o -q "verbose" "co-primary"; then v=1
+elif [ $v -eq 1 ] || configValueOn -o -q "verbose" "resync"; then v=1
 fi
 
 # redirect output of the next block
 [ $v -eq 1 ] && exec 4>&1 || exec 4>/dev/null
 {
-	git fetch $remote
-	git rebase --autostash -s recursive -X patience "$remote/$branch"
+	git fetch "$remote"
+	git rebase --autostash -X patience "$remote/$branch"
 } >&4
 

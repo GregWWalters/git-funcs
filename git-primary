@@ -16,14 +16,14 @@ helpTxt() {
 	<remote> is provided, it will show the primary branch for that remote instead
 	of the primary remote. Otherwise, it will first check the repository's
 	configuration for the primary remote, and if not found, return the first
-	remote assiciated with the repository. To change the primary remote, use
-	git-refesh -s <remote>."
+	remote associated with the repository. To change the primary remote, use
+	git-refresh -s <remote>."
 
 	heading 'OPTIONS'
 	option '-r' '(remote only) Print only the remote, not the primary branch'
 	option '-b' '(branch only) Print only the branch name, not the leading
 		"<remote>/".'
-	option '-q' '(quiet) Supress echoing the primary branch. Overrides .gitconfig
+	option '-q' '(quiet) Suppress echoing the primary branch. Overrides .gitconfig
 		options funcs.verbose and funcs.refresh.verbose.'
 	option '-v' '(verbose) Print additional information'
 	option '-h' '(help) Print this help'
