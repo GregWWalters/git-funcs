@@ -6,12 +6,12 @@ testInteger() {
 
 termWidth() (
 	if command -v stty >/dev/null 2>&1; then
-		w=$(stty size | cut -d' ' -f2)
-	elif command -v tput >/dev/null 2>&1; then
-		w=$(tput cols)
-	else
-		return 1
+		w=$(stty size 2>/dev/null | cut -d' ' -f2)
 	fi
+	if [ -z "$w" ] && command -v tput >/dev/null 2>&1; then
+		w=$(tput cols 2>/dev/null)
+	fi
+	testInteger "$w" && [ "$w" -gt 0 ] || return 1
 	echo "$w"
 )
 
