@@ -217,6 +217,13 @@ it also prints the result.
 * `-v` (verbose) Print additional information (default).
 * `-h` (help) Print this help.
 
+#### Deprecated: `merged-into`
+
+`git merged-into [<ancestor>] [<descendant>]` is kept as a thin
+backwards-compat shim that forwards to `git contains` with the arguments
+flipped and prints a deprecation warning. Prefer `git contains` in any
+new invocation.
+
 ### sweep
 
 `git sweep [-n] [-w] [-t <target>] [-q|-v]`

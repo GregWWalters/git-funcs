@@ -1,0 +1,52 @@
+#! /usr/bin/env sh
+
+# DEPRECATED: thin shim that forwards to `git contains` with the
+# arguments flipped. Will be removed in a future release.
+
+set -e # errexit
+. "$(dirname "$0")/helpers"
+
+helpTxt() {
+	heading 'NAME'
+	body 'git-merged-into - DEPRECATED alias for `git contains`'
+
+	heading 'SYNOPSIS'
+	body 'git merged-into [-v|-q] [<ancestor>] [<descendant>]'
+
+	heading 'DESCRIPTION'
+	body 'Deprecated. Use `git contains` instead. This shim forwards each
+	call to `git contains` with the arguments flipped:'
+	body '  old: git merged-into <ancestor> <descendant>'
+	body '  new: git contains    <descendant> <ancestor>'
+	body 'Defaults still map cleanly — `git merged-into` with no arguments
+	answers the same question as `git contains` with no arguments
+	("did my current branch land in primary?").'
+	body 'See `git contains -h` for full documentation.'
+}
+
+case "$1" in
+	"help"|"-help"|"--help")
+		helpTxt
+		exit 0
+		;;
+esac
+
+# Pull flags off the front so we can swap positionals independently.
+flags=
+while [ $# -gt 0 ]; do
+	case $1 in
+		-h) helpTxt; exit 0 ;;
+		-q|-v) flags="$flags $1"; shift ;;
+		-*) flags="$flags $1"; shift ;;
+		*) break ;;
+	esac
+done
+
+# Apply old defaults explicitly so we can hand contains both positionals.
+ancestor=${1:-'HEAD'}
+descendant=${2:-$(git primary)}
+
+echo >&2 "warning: 'git merged-into' is deprecated; use 'git contains' (arguments are flipped: target first, then branch)."
+
+# shellcheck disable=SC2086
+exec "$(dirname "$0")/git-contains" $flags "$descendant" "$ancestor"
