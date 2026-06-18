@@ -51,6 +51,7 @@ option() {
 # getPrimary [-q] [-o] [-r] [-b]
 getPrimary() (
 	q=0 o=0 r=0 b=0
+	OPTIND=1
 	while getopts ":qorb" opt; do
 		case $opt in
 			q) q=1 ;; # print nothing; return only found or not found via return code
@@ -104,6 +105,7 @@ getPrimaryBranch() (
 # configValueOn [-q|-e] [-o] -k <key> [-c <command>]
 configValueOn() (
 	q=1 echo=0 o=0
+	OPTIND=1
 	while getopts ":qeok:f:" opt; do
 		case $opt in
 			q) q=1; echo=0; ;;  # quiet on
