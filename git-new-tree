@@ -1,0 +1,135 @@
+#! /usr/bin/env sh
+
+set -e # errexit
+. "$(dirname "$0")/helpers"
+
+helpTxt() {
+	heading 'NAME'
+	body 'git-new-tree - Create a worktree, attaching or creating its branch'
+
+	heading 'SYNOPSIS'
+	body 'git new-tree [-q|-v] [-d <base-dir>] [-p <path>] <branch>'
+
+	heading 'DESCRIPTION'
+	body "Create a worktree for <branch>. If <branch> already exists locally,
+attach the worktree to it. Otherwise, create <branch> from the refreshed
+primary remote's HEAD (as 'git new-branch' does). To base on a non-primary
+remote, first set it with 'git refresh -s <remote>'."
+
+	body "By default, the worktree is placed at <base>/<branch>, where <base>
+is the first of: the path given to -p (used verbatim; -d ignored), the
+-d <base-dir> argument, the local git config value funcs.worktree.dir, or
+'<repo-parent>/wtree/<repo-name>'. Relative bases are anchored at the repo
+toplevel. Missing parent directories are created."
+
+	body "Branch names containing '/' (such as 'feature/PROJ-123_title') segment
+naturally into subdirectories under <base>."
+
+	body "On success, the absolute path of the new worktree is printed to
+stdout, so it can be captured in a shell wrapper to cd into."
+
+	heading 'OPTIONS'
+	option '-d <base-dir>' '(dir) Override the worktree base directory for this
+run. Ignored when -p is set.'
+	option '-p <path>' '(path) Use <path> verbatim as the worktree path; skip
+base-dir composition.'
+	option '-q' '(quiet) Suppress writing to stdout. Overrides .gitconfig
+options funcs.verbose and funcs.new-tree.verbose.'
+	option '-v' '(verbose) Print additional information'
+	option '-h' '(help) Print this help'
+
+	echo "\n"
+}
+
+case "$1" in
+	"help"|"-help"|"--help")
+		helpTxt
+		exit 0
+		;;
+esac
+
+q=0 v=0 dirArg="" pathArg=""
+while getopts ":hqvd:p:" opt; do
+	case $opt in
+		h) helpTxt; exit 0 ;;
+		q) q=1 v=0 ;;
+		v) v=1 ;;
+		d) dirArg=$OPTARG ;;
+		p) pathArg=$OPTARG ;;
+		:)
+			echo >&2 "Option \`-$OPTARG\` requires an argument." \
+				"Run git new-tree -h for help."
+			exit 1
+			;;
+		\?)
+			echo >&2 "Unknown option -$OPTARG. Run git new-tree -h for help."
+			exit 1
+			;;
+	esac
+done
+shift $(expr $OPTIND - 1)
+
+if [ $q -eq 1 ]; then
+	v=0
+elif [ $v -eq 1 ] || configValueOn -o -q "verbose" "new-tree"; then
+	v=1
+fi
+
+branch=$1
+if [ -z "$branch" ]; then
+	echo >&2 "git new-tree requires 1 argument <branch name>"
+	exit 1
+fi
+
+# Resolve worktree path. Relative bases are anchored at the repo toplevel so
+# behavior does not depend on the caller's CWD. -p is used verbatim.
+toplevel=$(git rev-parse --show-toplevel)
+if [ -n "$pathArg" ]; then
+	wtPath=$pathArg
+else
+	if [ -n "$dirArg" ]; then
+		base=$dirArg
+	else
+		base=$(git config --local --get funcs.worktree.dir || :)
+		if [ -z "$base" ]; then
+			base="$(dirname "$toplevel")/wtree/$(basename "$toplevel")"
+		fi
+	fi
+	case "$base" in
+		/*) ;;
+		*) base="$toplevel/$base" ;;
+	esac
+	wtPath="$base/$branch"
+fi
+
+# redirect informational output of the next block
+[ $v -eq 1 ] && exec 4>&1 || exec 4>/dev/null
+{
+	echo "worktree path: $wtPath"
+
+	parentDir=$(dirname "$wtPath")
+	if [ ! -d "$parentDir" ]; then
+		echo "creating parent directory: $parentDir"
+		mkdir -p "$parentDir"
+	fi
+
+	if git rev-parse --verify --quiet "refs/heads/$branch" >/dev/null; then
+		echo "branch $branch exists; attaching worktree"
+		git worktree add "$wtPath" "$branch"
+	else
+		echo "branch $branch does not exist; creating from refreshed primary"
+		git refresh -q
+		base_ref=$(getPrimary)
+		if [ -z "$base_ref" ]; then
+			echo >&2 "failed to resolve primary ref"
+			exit 1
+		fi
+		echo "basing $branch on $base_ref"
+		git worktree add -b "$branch" "$wtPath" "$base_ref"
+	fi
+} >&4
+
+# Always print the absolute worktree path on stdout for shell wrappers
+if [ $q -eq 0 ]; then
+	( cd "$wtPath" && pwd ) 2>/dev/null || echo "$wtPath"
+fi

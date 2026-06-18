@@ -148,6 +148,33 @@ associated with the repository. To change the primary remote, use git-refresh
 * `-v` (verbose) Print additional information
 * `-h` (help) Print help
 
+### new-tree
+
+`git new-tree [-q|-v] [-d <base-dir>] [-p <path>] <branch>`
+
+Create a worktree for `<branch>`. If the branch already exists locally, the
+worktree attaches to it. Otherwise the branch is created from the refreshed
+primary remote's HEAD (as `git new-branch` does). To base on a non-primary
+remote, first set it with `git refresh -s <remote>`.
+
+By default the worktree lands at `<base>/<branch>`, where `<base>` is the
+first of: the `-p` path (used verbatim), `-d <base-dir>`, the local config
+value `funcs.worktree.dir`, or `<repo-parent>/wtree/<repo-name>`. Relative
+bases are anchored at the repo toplevel, not the caller's CWD. Missing parent
+directories are created. Branch names with `/` (such as
+`feature/PROJ-123_title`) segment naturally into subdirectories.
+
+On success the absolute path of the new worktree is printed to stdout, so it
+can be captured by a shell wrapper to `cd` into.
+
+* `-d <base-dir>` Override the worktree base directory for this run. Ignored
+	when `-p` is set.
+* `-p <path>` Use `<path>` verbatim as the worktree path; skip base-dir
+	composition.
+* `-q` (quiet) Suppress writing to stdout.
+* `-v` (verbose) Print additional information.
+* `-h` (help) Print this help.
+
 ### resync
 
 `git resync [-v|-q] [<remote>]`

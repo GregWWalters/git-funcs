@@ -31,7 +31,7 @@ Each command checks its own verbose key before falling back to
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `funcs.worktree.dir` | string | *(none)* | Base directory for worktrees. Required unless an absolute path or `-d` is provided. |
+| `funcs.worktree.dir` | string | `<repo-parent>/wtree/<repo-name>` | Base directory for worktrees created by `git new-tree`. Overridable per-run with `-d <dir>` or `-p <path>`. |
 
 ### Example
 
@@ -42,7 +42,7 @@ Each command checks its own verbose key before falling back to
     verbose = false
 
 [funcs "worktree"]
-    dir = /home/user/worktrees/myproject
+    dir = ../wtree/myproject
 
 [funcs "refresh"]
     echo = true
