@@ -1,0 +1,82 @@
+#! /usr/bin/env sh
+
+set -e # errexit
+. "$(dirname "$0")/helpers"
+
+helpTxt() {
+	heading 'NAME'
+	body 'git-contains - Check whether one branch is fully contained in another'
+
+	heading 'SYNOPSIS'
+	body 'git contains [-v|-q] [<target>] [<branch>]'
+
+	heading 'DESCRIPTION'
+	body 'Check whether all of <branch>'\''s changes are already present in
+	<target>. Returns success when a merge of <branch> into <target> would
+	be a no-op. Unlike `git merge-base --is-ancestor`, this also recognizes
+	squash-merges and rebase-merges by simulating the merge with
+	`git merge-tree --write-tree` and comparing the resulting tree to
+	<target>'\''s tree.'
+	body 'If <target> is omitted, the primary branch is used. If <branch>
+	is omitted, the current HEAD is used. With no arguments at all,
+	answers "did my current branch land in primary?"'
+	body 'Exit status is 0 when <target> contains <branch>, 1 when it does
+	not (including when a merge would conflict). If the `-v` (verbose) flag
+	is set, it also prints the result.'
+
+	heading 'OPTIONS'
+	option '-q' '(quiet) Write nothing to stdout and use the exit status
+		instead.'
+	option '-v' '(verbose) Print additional information (default).'
+	option '-h' '(help) Print this help.'
+}
+
+case "$1" in
+	"help"|"-help"|"--help")
+		helpTxt
+		exit 0
+		;;
+esac
+
+q=0 v=1
+while getopts ":hqv" opt; do
+	case $opt in
+		h) helpTxt; exit 0 ;;
+		q) q=1 v=0 ;;
+		v) v=1 ;;
+		\?)
+			echo >&2 "Unknown option -$OPTARG. Run git contains -h for help."
+			exit 1
+			;;
+	esac
+done
+shift $(expr $OPTIND - 1)
+
+[ $q -eq 1 ] && v=0 || {
+	[ $v -eq 1 ] || configValueOn -o -q "verbose" "contains" && v=1
+}
+
+target=${1:-$(git primary)}
+branch=${2:-'HEAD'}
+
+if ! git rev-parse --verify "$target" >/dev/null 2>&1; then
+	echo >&2 "Target '$target' does not exist."
+	exit 1
+fi
+if ! git rev-parse --verify "$branch" >/dev/null 2>&1; then
+	echo >&2 "Branch '$branch' does not exist."
+	exit 1
+fi
+
+target_tree=$(git rev-parse "$target^{tree}")
+
+# Simulate a merge of branch into target. Conflicts (non-zero exit) mean
+# branch has work not in target.
+if merged_tree=$(git merge-tree --write-tree "$target" "$branch" 2>/dev/null) \
+		&& [ "$merged_tree" = "$target_tree" ]; then
+	[ $v -eq 1 ] && echo "$target contains $branch"
+	exit 0
+else
+	[ $v -eq 1 ] && echo "$target does not contain $branch"
+	exit 1
+fi

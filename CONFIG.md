@@ -24,7 +24,7 @@ Each command checks its own verbose key before falling back to
 | `funcs.primary.verbose` | git-primary |
 | `funcs.co-primary.verbose` | git-co-primary, git-new-branch, git-resync |
 | `funcs.up.verbose` | git-up |
-| `funcs.merged-into.verbose` | git-merged-into |
+| `funcs.contains.verbose` | git-contains |
 | `funcs.new-tree.verbose` | git-new-tree |
 
 ## Worktree Options (`git new-tree`)

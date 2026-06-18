@@ -195,22 +195,26 @@ as the first argument.
 
 * `-h` Print this help
 
-### merged-into
+### contains
 
-`git merged-into [-v|-q] <ancestor> <descendent>`
+`git contains [-v|-q] [<target>] [<branch>]`
 
-Check if the first branch <ancestor> has been merged into the second branch
-<descendent>.  This is accomplished with `git merge-base --is-ancestor`, which
-effectively looks for the head of <ancestor> in the commit history of
-<descendent>.
+Check whether all of `<branch>`'s changes are already present in `<target>`.
+Returns success when a merge of `<branch>` into `<target>` would be a no-op.
+Unlike `git merge-base --is-ancestor`, this also recognizes squash-merges and
+rebase-merges by simulating the merge with `git merge-tree --write-tree` and
+comparing the resulting tree to `<target>`'s tree.
 
-As `merge-base` normally does, the exit status will be 0 if the first branch
-has been merged into the second or 1 if not. If the `-v` (verbose) flag is set,
-it will also print out the result.'
+If `<target>` is omitted, the primary branch is used. If `<branch>` is omitted,
+the current HEAD is used. With no arguments at all, answers "did my current
+branch land in primary?"
 
-* `-q`, (quiet) Write nothing to stdout and use the exit status instead,
-	returning 0 if the first branch is merged into the second or 1 if not.
-* `-v` (verbose) Print additional information (default)
+Exit status is 0 when `<target>` contains `<branch>`, 1 when it does not
+(including when a merge would conflict). If the `-v` (verbose) flag is set,
+it also prints the result.
+
+* `-q` (quiet) Write nothing to stdout and use the exit status instead.
+* `-v` (verbose) Print additional information (default).
 * `-h` (help) Print this help.
 
 ### sweep
