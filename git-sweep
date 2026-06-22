@@ -91,6 +91,9 @@ esac
 
 [ $v -eq 1 ] && echo >&2 "target: $target"
 
+# Prune stale worktree metadata (directories removed outside of git)
+git worktree prune 2>/dev/null || :
+
 # Build worktree map: tab-separated "path\tbranch" for non-main worktrees
 main_wt=$(git rev-parse --show-toplevel)
 wt_map=$(git worktree list --porcelain | awk -v main="$main_wt" '
@@ -135,10 +138,15 @@ while read branch commit; do
 			[ $q -eq 0 ] && echo >&2 "  skip $branch (in worktree $wt_path; use -w)"
 			continue
 		fi
-		git worktree remove "$wt_path" 2>/dev/null || {
-			echo >&2 "  warning: could not remove worktree $wt_path"
-			continue
-		}
+		if ! git worktree remove "$wt_path" 2>/dev/null; then
+			if [ -d "$wt_path" ]; then
+				echo >&2 "  warning: could not remove worktree $wt_path"
+				continue
+			fi
+			# Directory already gone (e.g. removed with a parent worktree);
+			# prune stale metadata so branch deletion can proceed
+			git worktree prune 2>/dev/null || :
+		fi
 	fi
 
 	if git branch -D "$branch" >/dev/null 2>&1; then
