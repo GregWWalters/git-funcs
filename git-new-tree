@@ -125,7 +125,7 @@ fi
 			exit 1
 		fi
 		echo "basing $branch on $base_ref"
-		git worktree add -b "$branch" "$wtPath" "$base_ref"
+		git worktree add --no-track -b "$branch" "$wtPath" "$base_ref"
 	fi
 } >&4
 
