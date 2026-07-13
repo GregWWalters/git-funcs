@@ -19,8 +19,9 @@ remote, first set it with 'git refresh -s <remote>'."
 	body "By default, the worktree is placed at <base>/<branch>, where <base>
 is the first of: the path given to -p (used verbatim; -d ignored), the
 -d <base-dir> argument, the local git config value funcs.worktree.dir, or
-'<repo-parent>/wtree/<repo-name>'. Relative bases are anchored at the repo
-toplevel. Missing parent directories are created."
+'<repo-parent>/wtree/<repo-name>'. Relative bases are anchored at the main
+worktree root. Missing parent directories are created and rolled back on
+failure."
 
 	body "Branch names containing '/' (such as 'feature/PROJ-123_title') segment
 naturally into subdirectories under <base>."
@@ -81,9 +82,9 @@ if [ -z "$branch" ]; then
 	exit 1
 fi
 
-# Resolve worktree path. Relative bases are anchored at the repo toplevel so
-# behavior does not depend on the caller's CWD. -p is used verbatim.
-toplevel=$(git rev-parse --show-toplevel)
+# Resolve worktree path. Always derive from the main worktree so behavior is
+# identical whether invoked from the main checkout or a linked worktree.
+toplevel=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
 if [ -n "$pathArg" ]; then
 	wtPath=$pathArg
 else
@@ -108,24 +109,33 @@ fi
 	echo "worktree path: $wtPath"
 
 	parentDir=$(dirname "$wtPath")
+	createdParent=""
 	if [ ! -d "$parentDir" ]; then
 		echo "creating parent directory: $parentDir"
 		mkdir -p "$parentDir"
+		createdParent=$parentDir
 	fi
+
+	rollback() {
+		if [ -n "$createdParent" ]; then
+			rmdir -p "$createdParent" 2>/dev/null || :
+		fi
+	}
 
 	if git rev-parse --verify --quiet "refs/heads/$branch" >/dev/null; then
 		echo "branch $branch exists; attaching worktree"
-		git worktree add "$wtPath" "$branch"
+		git worktree add "$wtPath" "$branch" || { rollback; exit 1; }
 	else
 		echo "branch $branch does not exist; creating from refreshed primary"
 		git refresh -q
 		base_ref=$(getPrimary)
 		if [ -z "$base_ref" ]; then
 			echo >&2 "failed to resolve primary ref"
+			rollback
 			exit 1
 		fi
 		echo "basing $branch on $base_ref"
-		git worktree add --no-track -b "$branch" "$wtPath" "$base_ref"
+		git worktree add --no-track -b "$branch" "$wtPath" "$base_ref" || { rollback; exit 1; }
 	fi
 } >&4
 
