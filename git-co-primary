@@ -58,6 +58,14 @@ fi
 [ $v -eq 1 ] && exec 4>&1 || exec 4>/dev/null
 {
 	remoteArg=$1
+	localOnly=0
+	if [ -z "$(git remote | head -n 1)" ]; then localOnly=1; fi
+
+	if [ $localOnly -eq 1 ] && [ -n "$remoteArg" ]; then
+		echo >&2 "this repository has no remote set; cannot check out from remote '$remoteArg'"
+		exit 1
+	fi
+
 	if [ -n "$remoteArg" ]; then
 		echo "checking out primary branch from remote $remoteArg"
 	fi
@@ -68,8 +76,13 @@ fi
 		exit 1
 	fi
 
-	remote=${primary%%/*}
-	echo "checking out primary branch from primary remote $primary"
+	if [ $localOnly -eq 1 ]; then
+		echo >&2 "warning: no remote configured; checking out local primary branch"
+		echo "checking out primary branch $primary"
+	else
+		remote=${primary%%/*}
+		echo "checking out primary branch from primary remote $primary"
+	fi
 
 	# Check for uncommitted changes
 	if git diff-index --quiet HEAD; then dirty=0; else dirty=1; fi
@@ -79,7 +92,7 @@ fi
 		exit 1
 	fi
 	if [ $dirty -eq 1 ]; then git stash push; fi
-	git fetch "$remote"
+	if [ $localOnly -eq 0 ]; then git fetch "$remote"; fi
 	git checkout "$primary"
 	if [ $dirty -eq 1 ]; then git stash pop; fi
 } >&4

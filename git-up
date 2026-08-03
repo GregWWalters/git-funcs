@@ -50,6 +50,19 @@ shift $(expr $OPTIND - 1)
 
 # redirect output of the next block
 [ $q -eq 1 ] && exec 4>/dev/null || exec 4>&1
+
+if [ -z "$(git remote | head -n 1)" ]; then
+	if [ $# -gt 0 ]; then
+		echo >&2 "git-up: remote '$1' does not exist (repository has no remotes)"
+		exit 1
+	fi
+	echo >&2 "warning: no remote configured; skipping pull"
+	{
+		git submodule update --init --recursive
+	} >&4
+	exit 0
+fi
+
 {
 	git pull --rebase --autostash --prune "$@"
 	git submodule update --init --recursive

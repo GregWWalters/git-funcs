@@ -101,6 +101,11 @@ primary remote and branch based on the repository's first listed remote.
 * `-v` (verbose) Print additional information about how the remote and
 branch are determined
 
+If the repository has no remote at all, `refresh` degrades to a
+branch-only primary (a warning is printed to stderr) instead of failing. A
+repository with no commits yet (unborn HEAD) still errors, since there's
+nothing to base a primary on.
+
 ### primary
 
 `git primary [-r|-b] [-q|-v] [<remote>]`
@@ -117,6 +122,9 @@ remote associated with the repository. To change the primary remote, use
 * `-v` (verbose) Print additional information about how the remote and
 	branch are determined
 
+In a repository with no remote, the primary is branch-only: the default
+and `-b` forms print just the branch name, and `-r` prints nothing.
+
 ### co-primary
 
 `git co-primary [-s] [-q|-v] [<remote>]`
@@ -132,6 +140,10 @@ re-applied after.
 	funcs.verbose and funcs.refresh.verbose.
 * `-v` (verbose) Print additional information
 * `-h` (help) Print help.
+
+With no remote, checks out the local primary branch without fetching (a
+warning is printed to stderr). Passing an explicit `<remote>` in a
+remoteless repository is still an error.
 
 ### new-branch
 
@@ -191,6 +203,9 @@ remote, use `git-refresh -s <remote>`."
 * `-v` (verbose) Print output from git commands
 * `-h` (help) Print help.
 
+With no remote, prints a warning to stderr and exits 0 without attempting
+to sync.
+
 ### up
 
 `git up [-q|-v] [<remote/branch>]`
@@ -204,6 +219,9 @@ arguments to be passed to `git pull`. Any submodules will then be updated.
 	options funcs.verbose and funcs.refresh.verbose.'
 * `-v` '(verbose) Print output from git commands'
 * `-h` '(help) Print this help'
+
+With no remote, prints a warning to stderr, skips the pull, and still
+updates submodules.
 
 ### label
 

@@ -52,6 +52,16 @@ done
 shift $(expr $OPTIND - 1)
 
 remoteArg=$1
+
+if [ -z "$(git remote | head -n 1)" ]; then
+	if [ -n "$remoteArg" ]; then
+		echo >&2 "git-resync: remote '$remoteArg' does not exist (repository has no remotes)"
+		exit 1
+	fi
+	echo >&2 "warning: no remote configured; nothing to sync"
+	exit 0
+fi
+
 primary=${remoteArg:-$(git primary)}
 if [ -z "$primary" ]; then
 	echo >&2 "this repository has no remote set"

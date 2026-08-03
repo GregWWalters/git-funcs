@@ -57,11 +57,16 @@ if [ $q -eq 1 ]; then v=0
 elif [ $v -eq 1 ] || configValueOn -o -q "verbose" "primary"; then v=1
 fi
 
+localOnly=0
+if [ -z "$(git remote | head -n 1)" ]; then localOnly=1; fi
+
 remoteArg=$1
 if [ -n "$remoteArg" ]; then
 	[ $v -eq 1 ] && echo "looking up primary branch for $remoteArg"
-	echo $(git refresh -n -e $remoteArg)
-	exit 0
+	out=$(git refresh -n -e $remoteArg)
+	e=$?
+	[ $e -eq 0 ] && echo "$out"
+	exit $e
 fi
 
 primary=$(getPrimary -o)
@@ -71,6 +76,19 @@ if [ -z "$primary" ]; then
 else
 	[ $v -eq 1 ] && echo "using primary branch from local git config"
 fi
+
+if [ $localOnly -eq 1 ]; then
+	# Local-only mode: the whole primary string IS the branch, there is no
+	# remote to split off.
+	branch=$primary
+	if [ $ro -eq 1 -a $bo -eq 0 ]; then
+		: # remote-only requested; nothing to print, exit 0
+	else
+		echo $branch
+	fi
+	exit 0
+fi
+
 remote=${primary%%/*}
 branch=${primary#*/}
 

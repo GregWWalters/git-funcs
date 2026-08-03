@@ -137,31 +137,86 @@ fi
 {
 	autoRemote=$(git remote | head -n 1 )
 
-	remote=${remoteArg:-${configPrimaryRemote:-$autoRemote}}
-	if [ -z "$remote" ]; then
-		echo >&2 "this repository has no remote set"
-		exit 1
-	fi
-	if [ $noop -eq 0 ]; then git remote set-head "$remote" -a; fi
-	git submodule sync --recursive
-	git fetch --recurse-submodules=on-demand "$remote"
-	# get branch only from head: sed -E 's|^[^[:space:]/]*/||'
-	branch=$(git rev-parse --abbrev-ref "$remote/HEAD" | sed -E 's|^[^[:space:]/]*/||')
-
-	# Save remote and branch if necessary
-	if [ $noop -eq 0 ] && [ $setPrimary -eq 1 \
-		-o -z "$configPrimaryRemote" \
-		-o "$remote" != "$configPrimaryRemote" \
-		-o "$branch" != "$configPrimaryBranch" \
-	]; then
-		git config --local funcs.primaryRemote "$remote"
-		git config --local funcs.primaryBranch "$branch"
-		printf 'funcs.primaryRemote set to %s\nfuncs.primaryBranch set to %s\n' \
-			"$remote" "$branch"
+	if [ -z "$autoRemote" ]; then
+		# Local-only mode: no remote at all. Degrade to a branch-only
+		# primary instead of failing -- unless a remote was explicitly
+		# named, which is a user error since none can exist.
+		if [ -n "$remoteArg" ]; then
+			echo >&2 "git-refresh: remote '$remoteArg' does not exist (repository has no remotes)"
+			exit 1
+		fi
+		echo >&2 "warning: no remote configured; using local primary branch"
+		remote=""
+		branch=""
+		if [ -n "$configPrimaryBranch" ] \
+			&& git rev-parse --verify --quiet "refs/heads/$configPrimaryBranch" >/dev/null
+		then
+			branch=$configPrimaryBranch
+		fi
+		if [ -z "$branch" ]; then
+			defBranch=$(git config --get init.defaultBranch || :)
+			if [ -n "$defBranch" ] \
+				&& git rev-parse --verify --quiet "refs/heads/$defBranch" >/dev/null
+			then
+				branch=$defBranch
+			fi
+		fi
+		if [ -z "$branch" ]; then
+			for cand in main master; do
+				if git rev-parse --verify --quiet "refs/heads/$cand" >/dev/null; then
+					branch=$cand
+					break
+				fi
+			done
+		fi
+		if [ -z "$branch" ]; then
+			curBranch=$(git branch --show-current)
+			if [ -n "$curBranch" ] \
+				&& git rev-parse --verify --quiet "refs/heads/$curBranch" >/dev/null
+			then
+				branch=$curBranch
+			fi
+		fi
+		if [ -z "$branch" ]; then
+			echo >&2 "git-refresh: no commits yet (unborn HEAD); cannot determine a primary branch"
+			exit 1
+		fi
+		if [ $noop -eq 0 ]; then
+			git config --local funcs.primaryBranch "$branch"
+			git config --local --unset funcs.primaryRemote 2>/dev/null || :
+			printf 'funcs.primaryBranch set to %s\n' "$branch"
+		else
+			printf 'primary branch: %s\n' "$branch"
+		fi
 	else
-		printf 'primary remote: %s\n  primary branch: %s\n' "$remote" "$branch"
+		remote=${remoteArg:-${configPrimaryRemote:-$autoRemote}}
+		if [ -z "$remote" ]; then
+			echo >&2 "this repository has no remote set"
+			exit 1
+		fi
+		if [ $noop -eq 0 ]; then git remote set-head "$remote" -a; fi
+		git submodule sync --recursive
+		git fetch --recurse-submodules=on-demand "$remote"
+		# get branch only from head: sed -E 's|^[^[:space:]/]*/||'
+		branch=$(git rev-parse --abbrev-ref "$remote/HEAD" | sed -E 's|^[^[:space:]/]*/||')
+
+		# Save remote and branch if necessary
+		if [ $noop -eq 0 ] && [ $setPrimary -eq 1 \
+			-o -z "$configPrimaryRemote" \
+			-o "$remote" != "$configPrimaryRemote" \
+			-o "$branch" != "$configPrimaryBranch" \
+		]; then
+			git config --local funcs.primaryRemote "$remote"
+			git config --local funcs.primaryBranch "$branch"
+			printf 'funcs.primaryRemote set to %s\nfuncs.primaryBranch set to %s\n' \
+				"$remote" "$branch"
+		else
+			printf 'primary remote: %s\n  primary branch: %s\n' "$remote" "$branch"
+		fi
 	fi
 } >&4
 
-if [ $v -eq 0 ] && [ $echoOn -eq 1 ]; then echo "$remote/$branch"; fi
+if [ $v -eq 0 ] && [ $echoOn -eq 1 ]; then
+	if [ -n "$remote" ]; then echo "$remote/$branch"; else echo "$branch"; fi
+fi
 

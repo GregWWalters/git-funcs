@@ -69,6 +69,12 @@ getPrimary() (
 	if [ $q -eq 1 ]; then exec 1>/dev/null; fi
 	remote=$(git config --local --get funcs.primaryRemote || :)
 	branch=$(git config --local --get funcs.primaryBranch || :)
+	# Local-only mode: combined r+b mode with no remote configured but a
+	# branch set degrades to just the branch, never an error.
+	if [ $r -eq 1 ] && [ $b -eq 1 ] && [ -z "$remote" ] && [ -n "$branch" ]; then
+		echo "$branch"
+		return 0
+	fi
 	if { [ -z "$remote" ] && [ $r -eq 1 ]; } || { [ -z "$branch" ] && [ $b -eq 1 ]; }; then
 		if [ $o -eq 1 ]; then return 0; else return 1; fi
 	fi;
