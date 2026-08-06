@@ -8,7 +8,7 @@ helpTxt() {
 	body 'git-new-tree - Create a worktree, attaching or creating its branch'
 
 	heading 'SYNOPSIS'
-	body 'git new-tree [-q|-v] [-d <base-dir>] [-p <path>] <branch>'
+	body 'git new-tree [-q|-v] [-P] [-d <base-dir>] [-p <path>] <branch>'
 
 	heading 'DESCRIPTION'
 	body "Create a worktree for <branch>. If <branch> already exists locally,
@@ -26,6 +26,16 @@ failure."
 	body "Branch names containing '/' (such as 'feature/PROJ-123_title') segment
 naturally into subdirectories under <base>."
 
+	body "After creating the worktree, entries listed in the committed file
+.worktree-populate at the repo root (if present) and in the local git
+config keys funcs.worktree.copyPath and funcs.worktree.linkPath
+(multi-value) are populated into the new worktree from the main worktree
+at the same relative path. 'copy' entries are copied recursively; 'link'
+entries become absolute symlinks pointing back at the source. Useful for
+gitignored files that new worktrees need in place (e.g. .env). Missing
+sources warn and skip; existing destinations are never overwritten. See
+CONFIG.md for the .worktree-populate file format."
+
 	body "On success, the absolute path of the new worktree is printed to
 stdout, so it can be captured in a shell wrapper to cd into."
 
@@ -34,6 +44,8 @@ stdout, so it can be captured in a shell wrapper to cd into."
 run. Ignored when -p is set.'
 	option '-p <path>' '(path) Use <path> verbatim as the worktree path; skip
 base-dir composition.'
+	option '-P' '(no-populate) Skip populating configured funcs.worktree.copyPath
+and funcs.worktree.linkPath entries into the new worktree.'
 	option '-q' '(quiet) Suppress writing to stdout. Overrides .gitconfig
 options funcs.verbose and funcs.new-tree.verbose.'
 	option '-v' '(verbose) Print additional information'
@@ -49,12 +61,13 @@ case "$1" in
 		;;
 esac
 
-q=0 v=0 dirArg="" pathArg=""
-while getopts ":hqvd:p:" opt; do
+q=0 v=0 dirArg="" pathArg="" populate=1
+while getopts ":hqvPd:p:" opt; do
 	case $opt in
 		h) helpTxt; exit 0 ;;
 		q) q=1 v=0 ;;
 		v) v=1 ;;
+		P) populate=0 ;;
 		d) dirArg=$OPTARG ;;
 		p) pathArg=$OPTARG ;;
 		:)
@@ -138,6 +151,120 @@ fi
 		git worktree add --no-track -b "$branch" "$wtPath" "$base_ref" || { rollback; exit 1; }
 	fi
 } >&4
+
+# Populate configured files/dirs from the main worktree into the new one.
+# funcs.worktree.copyPath: recursive copy, preserves file type (dirs -> dirs).
+# funcs.worktree.linkPath: absolute symlink pointing back at the source.
+# Missing sources warn; existing destinations are never overwritten. Warnings
+# go to stderr regardless of -q so misconfiguration is visible; per-item
+# success messages only appear under -v (via fd 4 already opened above).
+if [ $populate -eq 1 ]; then
+	populateOne() (
+		mode=$1 rel=$2 srcRoot=$3 dstRoot=$4
+		# Strip a leading './' for user convenience, then reject anything
+		# that would escape the worktree or reach outside it.
+		rel=${rel#./}
+		case "/$rel/" in
+			*/../*|*//*)
+				echo >&2 "worktree $mode: '$rel' contains '..' or empty segment; skipping"
+				return 0
+				;;
+		esac
+		case "$rel" in
+			/*)
+				echo >&2 "worktree $mode: '$rel' is an absolute path; skipping"
+				return 0
+				;;
+			"")
+				return 0
+				;;
+		esac
+		src=$srcRoot/$rel
+		dst=$dstRoot/$rel
+		if [ ! -e "$src" ] && [ ! -L "$src" ]; then
+			echo >&2 "worktree $mode: source '$rel' does not exist in $srcRoot; skipping"
+			return 0
+		fi
+		if [ -e "$dst" ] || [ -L "$dst" ]; then
+			echo >&2 "worktree $mode: destination '$rel' already exists in worktree; skipping"
+			return 0
+		fi
+		parent=$(dirname "$dst")
+		if [ ! -d "$parent" ] && ! mkdir -p "$parent" 2>/dev/null; then
+			echo >&2 "worktree $mode: could not create parent dir for '$rel'; skipping"
+			return 0
+		fi
+		case $mode in
+			copy)
+				if cp -R "$src" "$dst" 2>/dev/null; then
+					echo "worktree copy: $rel"
+				else
+					echo >&2 "worktree copy: failed to copy '$rel'"
+				fi
+				;;
+			link)
+				if ln -s "$src" "$dst" 2>/dev/null; then
+					echo "worktree link: $rel -> $src"
+				else
+					echo >&2 "worktree link: failed to link '$rel'"
+				fi
+				;;
+		esac
+	)
+
+	# Emit a normalized stream of "<mode> <rel>" lines from three sources:
+	#   1. The committed .worktree-populate file at the repo root (team-wide
+	#      default; format: '<mode> <path>' per line, '#' comments, blanks
+	#      ignored).
+	#   2. Multi-value funcs.worktree.copyPath entries in local git config
+	#      (per-clone personal overlay).
+	#   3. Multi-value funcs.worktree.linkPath entries in local git config.
+	# Sources are unioned; duplicate destinations hit the existing
+	# already-exists guard in populateOne, so precedence is "whichever ran
+	# first wins" with a warning for the loser. Order within a source is
+	# preserved; sources run in the listed order.
+	{
+		manifest=$toplevel/.worktree-populate
+		if [ -f "$manifest" ]; then
+			# lineno tracks source position for readable warnings.
+			lineno=0
+			while IFS= read -r line || [ -n "$line" ]; do
+				lineno=$((lineno + 1))
+				# strip trailing comment (first '#' onward) and surrounding whitespace
+				line=${line%%#*}
+				# trim leading/trailing whitespace (POSIX-only sed)
+				line=$(printf '%s' "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+				[ -z "$line" ] && continue
+				# first whitespace-separated token is the mode; remainder is the path
+				mode=${line%%[[:space:]]*}
+				rel=${line#"$mode"}
+				rel=$(printf '%s' "$rel" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+				case "$mode" in
+					copy|link)
+						if [ -z "$rel" ]; then
+							echo >&2 "worktree populate: .worktree-populate:$lineno '$mode' with no path; skipping"
+						else
+							printf '%s %s\n' "$mode" "$rel"
+						fi
+						;;
+					*)
+						echo >&2 "worktree populate: .worktree-populate:$lineno unknown mode '$mode'; skipping"
+						;;
+				esac
+			done < "$manifest"
+		fi
+		git config --local --get-all funcs.worktree.copyPath 2>/dev/null |
+			while IFS= read -r rel; do
+				[ -n "$rel" ] && printf 'copy %s\n' "$rel"
+			done
+		git config --local --get-all funcs.worktree.linkPath 2>/dev/null |
+			while IFS= read -r rel; do
+				[ -n "$rel" ] && printf 'link %s\n' "$rel"
+			done
+	} | while read -r mode rel; do
+		[ -n "$mode" ] && [ -n "$rel" ] && populateOne "$mode" "$rel" "$toplevel" "$wtPath" >&4
+	done
+fi
 
 # Always print the absolute worktree path on stdout for shell wrappers
 if [ $q -eq 0 ]; then

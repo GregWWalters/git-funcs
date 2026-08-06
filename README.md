@@ -171,7 +171,7 @@ stacked diff). Use `.` or `@` for `<base>` to mean the current branch.
 
 ### new-tree
 
-`git new-tree [-q|-v] [-d <base-dir>] [-p <path>] <branch>`
+`git new-tree [-q|-v] [-P] [-d <base-dir>] [-p <path>] <branch>`
 
 Create a worktree for `<branch>`. If the branch already exists locally, the
 worktree attaches to it. Otherwise the branch is created from the refreshed
@@ -185,6 +185,24 @@ bases are anchored at the repo toplevel, not the caller's CWD. Missing parent
 directories are created. Branch names with `/` (such as
 `feature/PROJ-123_title`) segment naturally into subdirectories.
 
+After creating the worktree, entries from two sources are populated into
+the new worktree from the main worktree, at the same relative path:
+
+1. A committed `.worktree-populate` file at the repo root (team-wide
+	 default). One entry per line, `<mode> <path>`, where `<mode>` is
+	 `copy` or `link`. `#` starts a comment; blank lines are ignored.
+2. The multi-value local config keys `funcs.worktree.copyPath` and
+	 `funcs.worktree.linkPath` (per-clone personal overlay). Add entries
+	 with `git config --local --add funcs.worktree.copyPath <path>`.
+
+Both sources are unioned; duplicate destinations trigger a "destination
+already exists" warning without overwriting. Files and directories both
+work. Missing sources warn and skip. Absolute paths and paths containing
+`..` are rejected. Use `copy` for per-worktree editable state (e.g.
+`.env`), `link` for shared read-mostly artefacts. Skip all population for
+one invocation with `-P`. See `CONFIG.md` for the manifest format and
+full config reference.
+
 On success the absolute path of the new worktree is printed to stdout, so it
 can be captured by a shell wrapper to `cd` into.
 
@@ -192,6 +210,8 @@ can be captured by a shell wrapper to `cd` into.
 	when `-p` is set.
 * `-p <path>` Use `<path>` verbatim as the worktree path; skip base-dir
 	composition.
+* `-P` (no-populate) Skip populating configured `funcs.worktree.copyPath` and
+	`funcs.worktree.linkPath` entries into the new worktree.
 * `-q` (quiet) Suppress writing to stdout.
 * `-v` (verbose) Print additional information.
 * `-h` (help) Print this help.
