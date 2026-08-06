@@ -147,7 +147,7 @@ remoteless repository is still an error.
 
 ### new-branch
 
-`git new-branch [-q|-v] <branch-name> [<remote>]`
+`git new-branch [-b <base>] [-q|-v] <branch-name> [<remote>]`
 
 Create a new branch with <branch-name> based on the remote's HEAD. If
 <remote> is provided, it will use the primary branch for that remote instead
@@ -156,6 +156,15 @@ configuration for the primary remote, and if not found, use the first remote
 associated with the repository. To change the primary remote, use git-refresh
 -s <remote>.
 
+With `-b <base>`, the new branch is based on the local branch `<base>`
+instead of the primary, and `branch.<branch-name>.funcsBase` is set to
+`<base>` to record the stacking relationship (this is how you start a
+stacked diff). Use `.` or `@` for `<base>` to mean the current branch.
+`-b` cannot be combined with a `<remote>` argument. See `git stack` and the
+"Stacked diffs" section below.
+
+* `-b <base>` (base) Base the new branch on local branch `<base>` and record
+	it as the stack parent.
 * `-q` (quiet) Supress writing to stdout. Overrides .gitconfig funcs.verbose and funcs.refresh.verbose.
 * `-v` (verbose) Print additional information
 * `-h` (help) Print help
@@ -205,6 +214,37 @@ remote, use `git-refresh -s <remote>`."
 
 With no remote, prints a warning to stderr and exits 0 without attempting
 to sync.
+
+If the current branch is part of a stack (see "Stacked diffs" below),
+`resync` restacks the whole stack instead of just the current branch: the
+root is rebased onto the fetched primary, then every descendant is rebased
+onto its (possibly moved) parent, in BFS order. A parent that has already
+landed in primary — including via a squash- or rebase-merge — is skipped
+over rather than replayed, and the child's `branch.<name>.funcsBase` is
+re-pointed past it. On a rebase conflict partway through the cascade, the
+conflicting branch is left mid-rebase (resolve or abort as usual); re-running
+`git resync` afterwards finishes the rest of the stack.
+
+### stack
+
+`git stack [-q|-v]`
+
+Read-only. Print the tree of branches the current branch is stacked with, as
+recorded by `branch.<name>.funcsBase`. Root first, one branch per line,
+indented two spaces per depth beneath the implicit primary base.
+
+If the current branch isn't part of a stack, prints
+`<branch> (not stacked; base: <remote>/<primary>)` instead.
+
+Markers: ` *` the current branch; ` [merged]` the branch is fully contained
+in primary (incl. squash/rebase merges); ` [base missing]` the branch's
+recorded parent no longer exists (repaired automatically the next time
+`git resync` runs on this stack — `git stack` itself never modifies
+anything).
+
+* `-q` (quiet) Print nothing to stdout.
+* `-v` (verbose) Print additional information.
+* `-h` (help) Print this help.
 
 ### up
 
@@ -279,6 +319,11 @@ and squash-merges by simulating a merge and comparing the resulting tree.
 
 For each deleted branch, prints the branch name and head commit to stdout.
 Branches checked out in worktrees are skipped unless `-w` is set.
+
+If a deleted branch is the stack parent (`branch.<name>.funcsBase`) of other
+local branches, each child is re-pointed to the deleted branch's own parent
+(or un-stacked, if it had none), and a re-point notice is printed to stderr
+(respect `-q`) — or, in dry-run mode, what would be re-pointed.
 
 * `-n` (dry-run) Show what would be deleted without deleting.
 * `-w` (worktrees) Also remove worktrees for merged branches.

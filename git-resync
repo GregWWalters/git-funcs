@@ -19,6 +19,13 @@ helpTxt() {
 	primary remote, and if not found, return the first remote associated with the
 	repository."
 	body "To change the primary remote, use git-refresh -s <remote>."
+	body "If the current branch is part of a stack (see branch.<name>.funcsBase,
+	set by 'git new-branch -b'), resync restacks the whole stack: the root is
+	rebased onto the fetched primary, and every descendant is rebased onto its
+	(possibly moved) parent, in order. A parent already merged into primary
+	(including via squash/rebase merge) is skipped over rather than replayed,
+	and the child's funcsBase is re-pointed past it. Use 'git stack' to inspect
+	the stack."
 
 	heading 'OPTIONS'
 	option '-q' '(quiet) Suppress writing to stdout. Overrides .gitconfig
@@ -76,10 +83,152 @@ if [ $q -eq 1 ]; then v=0
 elif [ $v -eq 1 ] || configValueOn -o -q "verbose" "resync"; then v=1
 fi
 
+current=$(git branch --show-current 2>/dev/null || :)
+myBase=$(getBranchBase "$current" 2>/dev/null || :)
+myChildren=""
+[ -n "$current" ] && myChildren=$(getBranchChildren "$current" 2>/dev/null || :)
+
 # redirect output of the next block
 [ $v -eq 1 ] && exec 4>&1 || exec 4>/dev/null
+
+if [ -z "$current" ] || { [ -z "$myBase" ] && [ -z "$myChildren" ]; }; then
+	# Not part of a stack: exactly the historical behavior.
+	{
+		git fetch "$remote"
+		git rebase --autostash -X patience "$remote/$branch"
+	} >&4
+	exit 0
+fi
+
+# --- Stack-aware restack cascade ---
+
+cascadeFail() {
+	echo >&2 "git-resync: rebase conflict while restacking '$1'."
+	echo >&2 "Resolve the conflict (edit the files, 'git add' them), then run" \
+		"'git rebase --continue' (or 'git rebase --abort' to cancel). Re-run" \
+		"'git resync' afterwards to finish restacking the rest of the stack."
+	exit 1
+}
+
+# Find the stack root by walking funcsBase upward from $1. A dangling parent
+# (branch deleted) ends the walk there: the stale link is unset (with a
+# warning) and that branch becomes the root. Cycles are a hard error. Sets
+# $root.
+findRoot() {
+	b=$1
+	seen=" $b "
+	while :; do
+		p=$(getBranchBase "$b")
+		if [ -z "$p" ]; then
+			root=$b
+			return 0
+		fi
+		if ! git rev-parse --verify --quiet "refs/heads/$p" >/dev/null 2>&1; then
+			echo >&2 "warning: branch '$b' has funcsBase '$p', which no longer" \
+				"exists; treating '$b' as the stack root and clearing the stale link"
+			git config --local --unset "branch.$b.funcsBase"
+			root=$b
+			return 0
+		fi
+		case "$seen" in
+			*" $p "*)
+				echo >&2 "git-resync: cycle detected in funcsBase chain" \
+					"($seen$p ...); refusing to guess. Fix branch.<name>.funcsBase" \
+					"manually with 'git config --local --unset'."
+				exit 1
+				;;
+		esac
+		seen="$seen$p "
+		b=$p
+	done
+}
+
+# Prints "<branch> <parent>" pairs in BFS order rooted at $1 (root's parent
+# printed as "-"). Guards against config-graph cycles below the root too.
+buildStack() {
+	r=$1
+	printf '%s -\n' "$r"
+	queue=$r
+	visited=" $r "
+	while [ -n "$queue" ]; do
+		node=${queue%% *}
+		if [ "$node" = "$queue" ]; then queue=""; else queue=${queue#* }; fi
+		children=$(getBranchChildren "$node" 2>/dev/null || :)
+		for c in $children; do
+			case "$visited" in
+				*" $c "*) continue ;;
+			esac
+			visited="$visited$c "
+			printf '%s %s\n' "$c" "$node"
+			queue="$queue $c"
+		done
+	done
+}
+
+findRoot "$current"
+
+stackfile=$(mktemp)
+oldshafile=$(mktemp)
+datafile=$(mktemp)
+trap 'rm -f "$stackfile" "$oldshafile" "$datafile"' EXIT
+
 {
 	git fetch "$remote"
-	git rebase --autostash -X patience "$remote/$branch"
 } >&4
 
+buildStack "$root" > "$stackfile"
+
+: > "$oldshafile"
+: > "$datafile"
+while read -r name parent; do
+	sha=$(git rev-parse "refs/heads/$name")
+	merged=0
+	psha=""
+	if [ "$parent" != "-" ]; then
+		psha=$(awk -F'\t' -v n="$parent" '$1==n{print $2; exit}' "$oldshafile")
+		if isMergedInto "$remote/$branch" "$psha"; then merged=1; fi
+	fi
+	printf '%s\t%s\n' "$name" "$sha" >> "$oldshafile"
+	printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$parent" "$sha" "$merged" "$psha" >> "$datafile"
+done < "$stackfile"
+
+{
+	while IFS='	' read -r name parent oldsha merged psha; do
+		if [ "$parent" = "-" ]; then
+			git rebase --autostash -X patience "$remote/$branch" "$name" \
+				|| cascadeFail "$name"
+			if [ $v -eq 1 ]; then echo "restacked $name onto $remote/$branch"; fi
+			continue
+		fi
+
+		if git merge-base --is-ancestor "refs/heads/$parent" "refs/heads/$name" 2>/dev/null; then
+			if [ $v -eq 1 ]; then echo "$name already based on $parent; skipping"; fi
+			continue
+		fi
+
+		if [ "$merged" = "1" ]; then
+			gp=$(awk -F'\t' -v n="$parent" '$1==n{print $2; exit}' "$datafile")
+			if [ "$gp" = "-" ]; then
+				newbase="$remote/$branch"
+				newcfg=""
+			else
+				newbase="refs/heads/$gp"
+				newcfg="$gp"
+			fi
+			git rebase --autostash -X patience --onto "$newbase" "$psha" "$name" \
+				|| cascadeFail "$name"
+			if [ -n "$newcfg" ]; then
+				git config --local "branch.$name.funcsBase" "$newcfg"
+			else
+				git config --local --unset "branch.$name.funcsBase"
+			fi
+			if [ $v -eq 1 ]; then echo "restacked $name past merged '$parent' onto $newbase"; fi
+		else
+			git rebase --autostash -X patience --onto "refs/heads/$parent" "$psha" "$name" \
+				|| cascadeFail "$name"
+			if [ $v -eq 1 ]; then echo "restacked $name onto $parent"; fi
+		fi
+	done < "$datafile"
+
+	git checkout "$current"
+} >&4

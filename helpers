@@ -152,4 +152,43 @@ configValueOn() (
 	fi
 )
 
+# Returns the configured stack parent of a branch (branch.<branch>.funcsBase),
+# or nothing if unset. Exits 0 either way.
+# getBranchBase <branch>
+getBranchBase() (
+	branch=$1
+	git config --local --get "branch.$branch.funcsBase" 2>/dev/null || :
+)
+
+# Prints, one per line, the local branch names whose funcsBase is <branch>.
+# Exits 0 whether or not any are found.
+# getBranchChildren <branch>
+getBranchChildren() (
+	parent=$1
+	# The `|| :` is load-bearing: under `set -e`, the pipeline's exit
+	# status reflects the *last* config line's match (or "no matches at
+	# all"), not a real failure, so it must not trip errexit.
+	git config --local --get-regexp '^branch\..*\.funcsbase$' 2>/dev/null |
+	while read -r key val; do
+		name=${key#branch.}
+		name=${name%.funcsbase}
+		if [ "$val" = "$parent" ]; then echo "$name"; fi
+	done || :
+)
+
+# Returns success iff simulating a merge of <branch> into <target> would be a
+# no-op (i.e. <target> already contains all of <branch>'s changes), by
+# comparing trees via `git merge-tree --write-tree`. This is the same
+# squash/rebase-merge-aware check used by git-sweep and git-contains.
+# Exit codes: 0 merged, 1 unmerged (tree differs), 2 merge-tree conflicted.
+# isMergedInto <target> <branch>
+isMergedInto() (
+	target=$1
+	branch=$2
+	target_tree=$(git rev-parse "$target^{tree}" 2>/dev/null) || return 1
+	merged_tree=$(git merge-tree --write-tree "$target" "$branch" 2>/dev/null) || return 2
+	[ "$merged_tree" = "$target_tree" ] || return 1
+	return 0
+)
+
 # vim:ft=sh

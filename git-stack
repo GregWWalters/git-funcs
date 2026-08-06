@@ -1,0 +1,145 @@
+#! /usr/bin/env sh
+
+set -e # errexit
+. "$(dirname "$0")/helpers"
+
+helpTxt() {
+	heading 'NAME'
+	body 'git-stack - Show the current branch'\''s stack of dependent branches'
+
+	heading 'SYNOPSIS'
+	body 'git stack [-q|-v] [-h]'
+
+	heading 'DESCRIPTION'
+	body 'Print the tree of branches the current branch is stacked with, as
+	recorded by branch.<name>.funcsBase (set by "git new-branch -b"). Root
+	first, one branch per line, indented two spaces per depth beneath the
+	implicit primary base.'
+	body 'If the current branch is not part of a stack, prints
+	"<branch> (not stacked; base: <remote>/<primary>)" instead.'
+	body 'Markers: " *" the current branch; " [merged]" the branch is fully
+	contained in the primary (including via squash/rebase merge); " [base
+	missing]" the branch'\''s recorded parent no longer exists (repaired
+	automatically the next time "git resync" runs on this stack).'
+	body 'This command never modifies anything, including a dangling
+	funcsBase link (unlike "git resync", which repairs it).'
+
+	heading 'OPTIONS'
+	option '-q' '(quiet) Suppress writing to stdout. Overrides .gitconfig
+		options funcs.verbose and funcs.stack.verbose.'
+	option '-v' '(verbose) Print additional information'
+	option '-h' '(help) Print this help'
+}
+
+case "$1" in
+	"help"|"-help"|"--help")
+		helpTxt
+		exit 0
+		;;
+esac
+
+q=0 v=0
+while getopts ":hqv" opt; do
+	case $opt in
+		h) helpTxt; exit 0 ;;
+		q) q=1; v=0 ;;
+		v) v=1 ;;
+		\?)
+			echo >&2 "Unknown option -$OPTARG. Run git stack -h for help."
+			exit 1
+			;;
+	esac
+done
+shift $(expr $OPTIND - 1)
+
+if [ $q -eq 1 ]; then v=0
+elif [ $v -eq 1 ] || configValueOn -o -q "verbose" "stack"; then v=1
+fi
+
+current=$(git branch --show-current 2>/dev/null || :)
+if [ -z "$current" ]; then
+	echo >&2 "git-stack: not on a branch (detached HEAD)."
+	exit 1
+fi
+
+primary=$(git primary)
+
+myBase=$(getBranchBase "$current" 2>/dev/null || :)
+myChildren=$(getBranchChildren "$current" 2>/dev/null || :)
+
+if [ -z "$myBase" ] && [ -z "$myChildren" ]; then
+	[ $q -eq 0 ] && echo "$current (not stacked; base: $primary)"
+	exit 0
+fi
+
+# Find the stack root by walking funcsBase upward from $1, read-only: warns
+# (but does not repair) a dangling parent, and errors on a cycle. Sets
+# $root, $rootDangling (0/1), $rootMissingBase.
+findRoot() {
+	b=$1
+	seen=" $b "
+	rootDangling=0
+	rootMissingBase=""
+	while :; do
+		p=$(getBranchBase "$b")
+		if [ -z "$p" ]; then
+			root=$b
+			return 0
+		fi
+		if ! git rev-parse --verify --quiet "refs/heads/$p" >/dev/null 2>&1; then
+			echo >&2 "warning: branch '$b' has funcsBase '$p', which no longer exists"
+			root=$b
+			rootDangling=1
+			rootMissingBase=$p
+			return 0
+		fi
+		case "$seen" in
+			*" $p "*)
+				echo >&2 "git-stack: cycle detected in funcsBase chain" \
+					"($seen$p ...); refusing to guess."
+				exit 1
+				;;
+		esac
+		seen="$seen$p "
+		b=$p
+	done
+}
+
+findRoot "$current"
+
+# target ref for [merged] checks
+targetRef=$primary
+
+printSeen=" $root "
+
+printNode() {
+	name=$1
+	depth=$2
+	sha=$(git rev-parse --short "refs/heads/$name")
+	marker=""
+	[ "$name" = "$current" ] && marker="$marker *"
+	if isMergedInto "$targetRef" "refs/heads/$name"; then marker="$marker [merged]"; fi
+	if [ "$name" = "$root" ] && [ "$rootDangling" -eq 1 ]; then
+		marker="$marker [base missing]"
+	fi
+	indent=""
+	i=0
+	while [ "$i" -lt "$depth" ]; do
+		indent="$indent  "
+		i=$((i + 1))
+	done
+	printf '%s%s %s%s\n' "$indent" "$name" "$sha" "$marker"
+	children=$(getBranchChildren "$name" 2>/dev/null | sort || :)
+	for c in $children; do
+		case "$printSeen" in
+			*" $c "*) continue ;;
+		esac
+		printSeen="$printSeen$c "
+		printNode "$c" $((depth + 1))
+	done
+}
+
+[ $q -eq 1 ] && exit 0
+
+echo "$targetRef"
+printNode "$root" 1

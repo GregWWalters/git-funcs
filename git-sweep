@@ -80,7 +80,6 @@ if ! git rev-parse --verify "$target" >/dev/null 2>&1; then
 	exit 1
 fi
 
-target_tree=$(git rev-parse "$target^{tree}")
 current=$(git branch --show-current 2>/dev/null || :)
 
 # Derive local branch name from target to avoid deleting it
@@ -106,17 +105,24 @@ while read branch commit; do
 	[ "$branch" = "$current" ] && continue
 	[ "$branch" = "$skip_branch" ] && continue
 
-	# Simulate merge; conflicts mean the branch is not cleanly merged
-	merged_tree=$(git merge-tree --write-tree "$target" "$branch" 2>/dev/null) || {
-		[ $v -eq 1 ] && echo >&2 "  skip $branch (merge conflicts)"
+	# Simulate merge; conflicts mean the branch is not cleanly merged, and a
+	# differing tree means the branch has unmerged changes. isMergedInto
+	# legitimately returns 1/2 for these non-error outcomes, so its status
+	# must be captured via `||`, never as a bare statement, under `set -e`.
+	mergedStatus=0
+	isMergedInto "$target" "$branch" || mergedStatus=$?
+	if [ $mergedStatus -eq 2 ]; then
+		if [ $v -eq 1 ]; then echo >&2 "  skip $branch (merge conflicts)"; fi
 		continue
-	}
+	elif [ $mergedStatus -eq 1 ]; then
+		if [ $v -eq 1 ]; then echo >&2 "  skip $branch (unmerged changes)"; fi
+		continue
+	fi
 
-	# If the merged tree differs from target, the branch has unmerged changes
-	[ "$merged_tree" = "$target_tree" ] || {
-		[ $v -eq 1 ] && echo >&2 "  skip $branch (unmerged changes)"
-		continue
-	}
+	# Snapshot the branch's stack base and children before deletion drops
+	# its config section
+	bBase=$(getBranchBase "$branch")
+	bChildren=$(getBranchChildren "$branch")
 
 	# Check if branch is checked out in a worktree
 	wt_path=""
@@ -129,6 +135,15 @@ while read branch commit; do
 			echo "$branch $commit (worktree: $wt_path)"
 		else
 			echo "$branch $commit"
+		fi
+		if [ -n "$bChildren" ] && [ $q -eq 0 ]; then
+			for child in $bChildren; do
+				if [ -n "$bBase" ]; then
+					echo >&2 "  would re-point $child base -> $bBase"
+				else
+					echo >&2 "  would re-point $child base -> primary"
+				fi
+			done
 		fi
 		continue
 	fi
@@ -151,6 +166,17 @@ while read branch commit; do
 
 	if git branch -D "$branch" >/dev/null 2>&1; then
 		echo "$branch $commit"
+		if [ -n "$bChildren" ]; then
+			for child in $bChildren; do
+				if [ -n "$bBase" ]; then
+					git config --local "branch.$child.funcsBase" "$bBase"
+					if [ $q -eq 0 ]; then echo >&2 "  re-pointed $child base -> $bBase"; fi
+				else
+					git config --local --unset "branch.$child.funcsBase"
+					if [ $q -eq 0 ]; then echo >&2 "  re-pointed $child base -> primary"; fi
+				fi
+			done
+		fi
 	else
 		echo >&2 "  warning: could not delete $branch"
 	fi

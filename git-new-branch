@@ -9,7 +9,7 @@ helpTxt() {
 	body "git-new-branch - Create a new branch based on the remote's latest HEAD"
 
 	heading 'SYNOPSIS'
-	body "git new-branch <branch-name> [<remote>]"
+	body "git new-branch [-b <base>] <branch-name> [<remote>]"
 
 	heading 'DESCRIPTION'
 	body "Create a new branch with <branch-name> based on the remote's HEAD. If
@@ -18,8 +18,16 @@ helpTxt() {
 	configuration for the primary remote, and if not found, use the first remote
 	associated with the repository. To change the primary remote, use git-refresh
 	-s <remote>."
+	body "If -b <base> is given, the new branch is based on the local branch
+	<base> instead of the primary, and branch.<branch-name>.funcsBase is set
+	to <base> to record the stacking relationship (used by git resync, git
+	stack, and git sweep). Use '.' or '@' for <base> to mean the current
+	branch. -b cannot be combined with a <remote> argument."
 
 	heading 'OPTIONS'
+	option '-b <base>' '(base) Base the new branch on local branch <base>
+		instead of the primary, recording it as the branch'\''s stack parent.
+		'\''.'\'' or '\''@'\'' means the current branch.'
 	option '-s' '(stash) Automatically stash uncommitted changes before checking
 	out the branch and pop after'
 	option '-q' '(quiet) Suppress writing to stdout. Overrides .gitconfig
@@ -37,13 +45,19 @@ case "$1" in
 		;;
 esac
 
-s=0 q=0 v=0
-while getopts ":hsqv" opt; do
+s=0 q=0 v=0 baseArg=""
+while getopts ":hsqvb:" opt; do
 	case $opt in
 		h) helpTxt; exit 0 ;;
 		s) s=1 ;;
 		q) q=1 v=0; ;;
 		v) v=1 ;;
+		b) baseArg=$OPTARG ;;
+		:)
+			echo >&2 "Option \`-$OPTARG\` requires an argument." \
+				"Run git new-branch -h for help."
+			exit 1
+			;;
 		\?)
 			echo >&2 "Unknown option -$OPTARG. Run git new-branch -h for help."
 			exit 1
@@ -66,6 +80,31 @@ fi
 
 remoteArg=$2
 
+if [ -n "$baseArg" ] && [ -n "$remoteArg" ]; then
+	echo >&2 "git new-branch: -b <base> cannot be combined with a <remote> argument."
+	exit 1
+fi
+
+base=""
+if [ -n "$baseArg" ]; then
+	case "$baseArg" in
+		"."|"@")
+			base=$(git branch --show-current 2>/dev/null || :)
+			if [ -z "$base" ]; then
+				echo >&2 "git new-branch: -b $baseArg requires a checked-out branch (detached HEAD?)."
+				exit 1
+			fi
+			;;
+		*)
+			base=$baseArg
+			;;
+	esac
+	if ! git rev-parse --verify --quiet "refs/heads/$base" >/dev/null 2>&1; then
+		echo >&2 "git new-branch: base branch '$base' does not exist locally."
+		exit 1
+	fi
+fi
+
 # redirect output of the next block
 [ $v -eq 1 ] && exec 4>&1 || exec 4>/dev/null
 {
@@ -77,8 +116,15 @@ remoteArg=$2
 		exit 1
 	fi
 	if [ "$modified" -gt 0 ]; then git stash push; fi
-	git co-primary ${remoteArg:+"$remoteArg"}
+	if [ -n "$base" ]; then
+		git checkout "$base"
+	else
+		git co-primary ${remoteArg:+"$remoteArg"}
+	fi
 	git checkout -b "$branch"
+	if [ -n "$base" ]; then
+		git config --local "branch.$branch.funcsBase" "$base"
+	fi
 	if [ "$modified" -gt 0 ]; then git stash pop; fi
 } >&4
 
