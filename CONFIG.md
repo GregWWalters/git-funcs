@@ -39,8 +39,9 @@ Each command checks its own verbose key before falling back to
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `funcs.worktree.dir` | string | `<repo-parent>/wtree/<repo-name>` | Base directory for worktrees created by `git new-tree`. Overridable per-run with `-d <dir>` or `-p <path>`. |
-| `funcs.worktree.copyPath` | string (multi-value) | none | Paths (relative to the main worktree) copied recursively into each new worktree after creation. Set one entry per invocation with `git config --local --add funcs.worktree.copyPath <path>`. Files and directories both work. Missing sources warn to stderr and are skipped; existing destinations are never overwritten. Absolute paths and paths containing `..` are rejected. Skip per-run with `git new-tree -P`. These entries are a per-clone overlay on top of `.worktree-populate` (see below). |
+| `funcs.worktree.copyPath` | string (multi-value) | none | Paths (relative to the main worktree) copied recursively into each new worktree after creation. Set one entry per invocation with `git config --local --add funcs.worktree.copyPath <path>`. Files and directories both work. Missing sources are handled per `funcs.worktree.onMissing` (see below). Existing destinations are never overwritten. Absolute paths and paths containing `..` are rejected. Skip per-run with `git new-tree -P`. These entries are a per-clone overlay on top of `.worktree-populate` (see below). |
 | `funcs.worktree.linkPath` | string (multi-value) | none | Like `copyPath`, but creates an absolute symlink pointing back at the source in the main worktree instead of copying. Use for shared caches or large read-mostly artefacts where a single source of truth is wanted. Avoid for files you edit per-worktree (`.env` and friends — use `copyPath` for those). |
+| `funcs.worktree.onMissing` | enum: `warn` \| `silent` \| `block` | `warn` | What to do when a `copyPath` / `linkPath` source doesn't exist in the main worktree. `warn` prints to stderr and skips; `silent` skips quietly; `block` prints to stderr, tears down the just-created worktree (removes it, deletes the branch if it was newly created, and rolls back any parent directory `git new-tree` created), and exits non-zero. Applies only to entries sourced from local git config; entries from `.worktree-populate` follow the manifest's own `!onMissing` directive if set, otherwise fall back to this value. |
 
 ### `.worktree-populate` (committed manifest)
 
@@ -52,12 +53,33 @@ populates the same files into new worktrees.
 
 Format: one entry per line, `<mode> <path>`, where `<mode>` is `copy` or
 `link` and `<path>` is a repo-root-relative path (files or directories).
-Lines starting with `#` are comments; blank lines are ignored. Comments
-after a value on the same line (`copy .env  # local db`) are also
-stripped.
+Mode and path are separated by any run of whitespace (spaces or tabs);
+leading and trailing whitespace on the line is trimmed. Lines starting
+with `#` are comments; blank lines are ignored. Comments after a value
+on the same line (`copy .env  # local db`) are also stripped — so `#`
+cannot appear literally in a path.
+
+`<path>` must be relative and cannot contain `..` segments; absolute
+paths and paths that would escape the worktree are rejected with a
+warning and skipped (same guard as `funcs.worktree.copyPath`
+config entries). Any first token that is not `copy`, `link`, or the
+`!onMissing` directive (below) is treated as an unknown directive —
+warned to stderr with `.worktree-populate:<lineno>` and skipped, so the
+rest of the manifest still applies.
+
+A `!onMissing <value>` directive line sets the missing-source behavior
+for entries listed in the manifest, where `<value>` is `warn`, `silent`,
+or `block` (same semantics as the `funcs.worktree.onMissing` config
+key). It overrides the config default for manifest-sourced entries only;
+config-sourced entries continue to follow `funcs.worktree.onMissing`.
+Position doesn't matter — the whole manifest uses the resolved value.
+If the directive is set more than once with different values, the last
+wins and a warning is printed. If absent, the manifest inherits
+`funcs.worktree.onMissing` (which itself defaults to `warn`).
 
 ```
 # Team defaults for every worktree.
+!onMissing block
 copy .env
 copy .env.local
 copy .vscode

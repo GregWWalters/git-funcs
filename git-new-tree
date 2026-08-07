@@ -32,9 +32,17 @@ config keys funcs.worktree.copyPath and funcs.worktree.linkPath
 (multi-value) are populated into the new worktree from the main worktree
 at the same relative path. 'copy' entries are copied recursively; 'link'
 entries become absolute symlinks pointing back at the source. Useful for
-gitignored files that new worktrees need in place (e.g. .env). Missing
-sources warn and skip; existing destinations are never overwritten. See
-CONFIG.md for the .worktree-populate file format."
+gitignored files that new worktrees need in place (e.g. .env). Existing
+destinations are never overwritten."
+
+	body "The behavior when a source is missing is configurable. The local
+git config key funcs.worktree.onMissing sets it for config-sourced
+entries (default 'warn'; values: 'warn' | 'silent' | 'block'). A
+'!onMissing <value>' directive line in .worktree-populate sets it for
+manifest-sourced entries, overriding the config default for those. 'warn'
+prints to stderr and skips; 'silent' skips quietly; 'block' prints to
+stderr, tears down the new worktree, and exits non-zero. See CONFIG.md
+for the .worktree-populate file format."
 
 	body "On success, the absolute path of the new worktree is printed to
 stdout, so it can be captured in a shell wrapper to cd into."
@@ -137,9 +145,11 @@ fi
 
 	if git rev-parse --verify --quiet "refs/heads/$branch" >/dev/null; then
 		echo "branch $branch exists; attaching worktree"
+		branchExisted=1
 		git worktree add "$wtPath" "$branch" || { rollback; exit 1; }
 	else
 		echo "branch $branch does not exist; creating from refreshed primary"
+		branchExisted=0
 		git refresh -q
 		base_ref=$(getPrimary)
 		if [ -z "$base_ref" ]; then
@@ -155,12 +165,30 @@ fi
 # Populate configured files/dirs from the main worktree into the new one.
 # funcs.worktree.copyPath: recursive copy, preserves file type (dirs -> dirs).
 # funcs.worktree.linkPath: absolute symlink pointing back at the source.
-# Missing sources warn; existing destinations are never overwritten. Warnings
-# go to stderr regardless of -q so misconfiguration is visible; per-item
-# success messages only appear under -v (via fd 4 already opened above).
+# Existing destinations are never overwritten. Missing-source behavior is
+# per-entry, resolved from funcs.worktree.onMissing (config entries) or
+# a '!onMissing' directive in .worktree-populate (manifest entries):
+#   warn   - stderr + skip (default)
+#   silent - skip quietly
+#   block  - stderr + tear down the worktree + exit non-zero
+# Warnings go to stderr regardless of -q so misconfiguration is visible;
+# per-item success messages only appear under -v (via fd 4 already opened).
 if [ $populate -eq 1 ]; then
+	# Resolve config default for onMissing; validate.
+	cfgOnMissing=$(git config --local --get funcs.worktree.onMissing 2>/dev/null || echo warn)
+	case "$cfgOnMissing" in
+		warn|silent|block) ;;
+		*)
+			echo >&2 "worktree populate: invalid funcs.worktree.onMissing '$cfgOnMissing'; using 'warn'"
+			cfgOnMissing=warn
+			;;
+	esac
+
+	# populateOne returns:
+	#   0 - populated or skipped (warn/silent, or benign guard hit)
+	#   2 - missing source with onMissing=block; caller must tear down
 	populateOne() (
-		mode=$1 rel=$2 srcRoot=$3 dstRoot=$4
+		mode=$1 om=$2 rel=$3 srcRoot=$4 dstRoot=$5
 		# Strip a leading './' for user convenience, then reject anything
 		# that would escape the worktree or reach outside it.
 		rel=${rel#./}
@@ -182,8 +210,17 @@ if [ $populate -eq 1 ]; then
 		src=$srcRoot/$rel
 		dst=$dstRoot/$rel
 		if [ ! -e "$src" ] && [ ! -L "$src" ]; then
-			echo >&2 "worktree $mode: source '$rel' does not exist in $srcRoot; skipping"
-			return 0
+			case $om in
+				silent) return 0 ;;
+				block)
+					echo >&2 "worktree $mode: source '$rel' does not exist in $srcRoot; onMissing=block, aborting"
+					return 2
+					;;
+				*)
+					echo >&2 "worktree $mode: source '$rel' does not exist in $srcRoot; skipping"
+					return 0
+					;;
+			esac
 		fi
 		if [ -e "$dst" ] || [ -L "$dst" ]; then
 			echo >&2 "worktree $mode: destination '$rel' already exists in worktree; skipping"
@@ -212,58 +249,105 @@ if [ $populate -eq 1 ]; then
 		esac
 	)
 
-	# Emit a normalized stream of "<mode> <rel>" lines from three sources:
-	#   1. The committed .worktree-populate file at the repo root (team-wide
-	#      default; format: '<mode> <path>' per line, '#' comments, blanks
-	#      ignored).
-	#   2. Multi-value funcs.worktree.copyPath entries in local git config
-	#      (per-clone personal overlay).
-	#   3. Multi-value funcs.worktree.linkPath entries in local git config.
+	# Two-pass over the manifest so a '!onMissing' directive anywhere in
+	# the file applies to every manifest entry (last-set wins with a
+	# warning). Config-sourced entries always use cfgOnMissing.
+	manifest=$toplevel/.worktree-populate
+	manifestOnMissing=""
+	streamFile=$(mktemp) || { echo >&2 "worktree populate: mktemp failed"; exit 1; }
+	# shellcheck disable=SC2064
+	trap "rm -f '$streamFile'" EXIT INT HUP TERM
+
+	# Pass 1: scan manifest for the onMissing directive only.
+	if [ -f "$manifest" ]; then
+		lineno=0
+		while IFS= read -r line || [ -n "$line" ]; do
+			lineno=$((lineno + 1))
+			line=${line%%#*}
+			line=$(printf '%s' "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+			[ -z "$line" ] && continue
+			tok=${line%%[[:space:]]*}
+			[ "$tok" = "!onMissing" ] || continue
+			val=${line#"$tok"}
+			val=$(printf '%s' "$val" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+			case "$val" in
+				warn|silent|block)
+					if [ -n "$manifestOnMissing" ] && [ "$manifestOnMissing" != "$val" ]; then
+						echo >&2 "worktree populate: .worktree-populate:$lineno '!onMissing' already set to '$manifestOnMissing'; overriding with '$val'"
+					fi
+					manifestOnMissing=$val
+					;;
+				*)
+					echo >&2 "worktree populate: .worktree-populate:$lineno '!onMissing' value must be warn|silent|block; got '$val'; ignoring"
+					;;
+			esac
+		done < "$manifest"
+	fi
+	resolvedManifestOM=${manifestOnMissing:-$cfgOnMissing}
+
+	# Pass 2: emit a normalized stream of "<mode> <onMissing> <rel>" lines.
 	# Sources are unioned; duplicate destinations hit the existing
 	# already-exists guard in populateOne, so precedence is "whichever ran
-	# first wins" with a warning for the loser. Order within a source is
-	# preserved; sources run in the listed order.
+	# first wins" with a warning for the loser.
 	{
-		manifest=$toplevel/.worktree-populate
 		if [ -f "$manifest" ]; then
-			# lineno tracks source position for readable warnings.
 			lineno=0
 			while IFS= read -r line || [ -n "$line" ]; do
 				lineno=$((lineno + 1))
-				# strip trailing comment (first '#' onward) and surrounding whitespace
 				line=${line%%#*}
-				# trim leading/trailing whitespace (POSIX-only sed)
 				line=$(printf '%s' "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
 				[ -z "$line" ] && continue
-				# first whitespace-separated token is the mode; remainder is the path
 				mode=${line%%[[:space:]]*}
 				rel=${line#"$mode"}
 				rel=$(printf '%s' "$rel" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
 				case "$mode" in
+					!onMissing) ;; # already handled in pass 1
 					copy|link)
 						if [ -z "$rel" ]; then
 							echo >&2 "worktree populate: .worktree-populate:$lineno '$mode' with no path; skipping"
 						else
-							printf '%s %s\n' "$mode" "$rel"
+							printf '%s %s %s\n' "$mode" "$resolvedManifestOM" "$rel"
 						fi
 						;;
 					*)
-						echo >&2 "worktree populate: .worktree-populate:$lineno unknown mode '$mode'; skipping"
+						echo >&2 "worktree populate: .worktree-populate:$lineno unknown directive '$mode'; skipping"
 						;;
 				esac
 			done < "$manifest"
 		fi
 		git config --local --get-all funcs.worktree.copyPath 2>/dev/null |
 			while IFS= read -r rel; do
-				[ -n "$rel" ] && printf 'copy %s\n' "$rel"
+				[ -n "$rel" ] && printf 'copy %s %s\n' "$cfgOnMissing" "$rel"
 			done
 		git config --local --get-all funcs.worktree.linkPath 2>/dev/null |
 			while IFS= read -r rel; do
-				[ -n "$rel" ] && printf 'link %s\n' "$rel"
+				[ -n "$rel" ] && printf 'link %s %s\n' "$cfgOnMissing" "$rel"
 			done
-	} | while read -r mode rel; do
-		[ -n "$mode" ] && [ -n "$rel" ] && populateOne "$mode" "$rel" "$toplevel" "$wtPath" >&4
-	done
+	} > "$streamFile"
+
+	# Consume the stream in the current shell so we can react to a block.
+	blockFail=0
+	while IFS= read -r entry; do
+		[ -z "$entry" ] && continue
+		mode=${entry%% *}
+		rest=${entry#* }
+		om=${rest%% *}
+		rel=${rest#* }
+		if [ -z "$mode" ] || [ -z "$rel" ]; then continue; fi
+		populateOne "$mode" "$om" "$rel" "$toplevel" "$wtPath" >&4 && rc=0 || rc=$?
+		if [ $rc -eq 2 ]; then
+			blockFail=1
+			break
+		fi
+	done < "$streamFile"
+
+	if [ $blockFail -eq 1 ]; then
+		echo >&2 "worktree populate: tearing down $wtPath"
+		git worktree remove --force "$wtPath" 2>/dev/null || :
+		[ "$branchExisted" = "0" ] && git branch -D "$branch" 2>/dev/null || :
+		[ -n "$createdParent" ] && rmdir -p "$createdParent" 2>/dev/null || :
+		exit 1
+	fi
 fi
 
 # Always print the absolute worktree path on stdout for shell wrappers
