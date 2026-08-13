@@ -8,20 +8,35 @@ helpTxt() {
 	body 'git-sweep - Delete local branches already merged into the target'
 
 	heading 'SYNOPSIS'
-	body 'git sweep [-n] [-w] [-t <target>] [-q|-v]'
+	body 'git sweep [-n] [-w] [-f] [-p|-P] [-t <target>] [-q|-v]'
 
 	heading 'DESCRIPTION'
 	body 'Find and delete local branches whose changes are fully present in the
 	target branch. Unlike `git branch --merged`, this detects rebase-merges and
 	squash-merges by simulating a merge and comparing the resulting tree.'
+	body 'The tree comparison only holds while the target still merges the
+	branch cleanly. Once the target advances past a squash-merged branch, that
+	branch reads as conflicted forever even though every line of it shipped. So
+	when the comparison fails, GitHub is asked whether a merged pull request
+	exists for the branch; it is swept only if it carries no commits beyond the
+	one that was merged. Disable with -P, or `funcs.sweep.pr = false`.'
 	body 'For each deleted branch, prints the branch name and head commit to
 	stdout.'
 	body 'Branches checked out in worktrees are skipped unless -w is set, in
-	which case the worktree is removed first.'
+	which case the worktree is removed first. Removal refuses to discard
+	untracked files (a stray .idea/ is enough to strand an otherwise merged
+	worktree) — use -f to override. With -w, worktrees with a detached HEAD are
+	swept too; holding no branch ref, they are otherwise invisible here.'
 
 	heading 'OPTIONS'
 	option '-n' '(dry-run) Show what would be deleted without deleting.'
-	option '-w' '(worktrees) Also remove worktrees for merged branches.'
+	option '-w' '(worktrees) Also remove worktrees for merged branches, and
+		sweep merged detached-HEAD worktrees.'
+	option '-f' '(force) Remove worktrees even when they hold uncommitted or
+		untracked files. Implies -w.'
+	option '-p' '(pull requests) Consult GitHub for squash-merged branches
+		(default when `gh` is available).'
+	option '-P' '(no pull requests) Compare trees only; never call GitHub.'
 	option '-t <target>' '(target) Branch or ref to compare against (default:
 		primary remote/branch).'
 	option '-q' '(quiet) Suppress informational output.'
@@ -36,12 +51,15 @@ case "$1" in
 		;;
 esac
 
-dryRun=0 wt=0 targetArg="" q=0 v=0
-while getopts ":hnwt:qv" opt; do
+dryRun=0 wt=0 force=0 pr=-1 targetArg="" q=0 v=0
+while getopts ":hnwfpPt:qv" opt; do
 	case $opt in
 		h) helpTxt; exit 0 ;;
 		n) dryRun=1 ;;
 		w) wt=1 ;;
+		f) force=1; wt=1 ;;
+		p) pr=1 ;;
+		P) pr=0 ;;
 		t) targetArg=$OPTARG ;;
 		q) q=1; v=0 ;;
 		v) v=1 ;;
@@ -90,6 +108,30 @@ esac
 
 [ $v -eq 1 ] && echo >&2 "target: $target"
 
+# Resolve the pull-request fallback: explicit flag wins, then config, then on
+# by default. Loading is what actually decides — a repo with no GitHub remote
+# or no `gh` simply yields an empty map and the tree comparison stands alone.
+if [ $pr -eq -1 ]; then
+	if configValueOn -o -q "pr" "sweep"; then
+		pr=1
+	elif [ "$(git config --get --type=bool funcs.sweep.pr || :)" = "false" ]; then
+		pr=0
+	else
+		pr=1
+	fi
+fi
+
+prMap=""
+if [ $pr -eq 1 ]; then
+	if prMap=$(loadMergedPrMap); then
+		[ $v -eq 1 ] && echo >&2 \
+			"merged PRs known to GitHub: $(printf '%s' "$prMap" | grep -c '')"
+	else
+		prMap=""
+		[ $v -eq 1 ] && echo >&2 "no GitHub PR data; comparing trees only"
+	fi
+fi
+
 # Prune stale worktree metadata (directories removed outside of git)
 git worktree prune 2>/dev/null || :
 
@@ -111,12 +153,25 @@ while read branch commit; do
 	# must be captured via `||`, never as a bare statement, under `set -e`.
 	mergedStatus=0
 	isMergedInto "$target" "$branch" || mergedStatus=$?
-	if [ $mergedStatus -eq 2 ]; then
-		if [ $v -eq 1 ]; then echo >&2 "  skip $branch (merge conflicts)"; fi
-		continue
-	elif [ $mergedStatus -eq 1 ]; then
-		if [ $v -eq 1 ]; then echo >&2 "  skip $branch (unmerged changes)"; fi
-		continue
+	viaPr=0
+	if [ $mergedStatus -ne 0 ]; then
+		# A squash- or rebase-merged branch stops comparing equal as soon as
+		# the target moves on, so a failed comparison is not proof the work is
+		# unlanded. Ask GitHub what was actually merged before writing it off.
+		prOid=""
+		if [ -n "$prMap" ]; then
+			prOid=$(printf '%s\n' "$prMap" | \
+				awk -F'\t' -v b="$branch" '$1 == b { print $2; exit }')
+		fi
+		if isMergedViaPR "$prOid" "$branch"; then
+			viaPr=1
+		elif [ $mergedStatus -eq 2 ]; then
+			if [ $v -eq 1 ]; then echo >&2 "  skip $branch (merge conflicts)"; fi
+			continue
+		else
+			if [ $v -eq 1 ]; then echo >&2 "  skip $branch (unmerged changes)"; fi
+			continue
+		fi
 	fi
 
 	# Snapshot the branch's stack base and children before deletion drops
@@ -128,6 +183,12 @@ while read branch commit; do
 	wt_path=""
 	if [ -n "$wt_map" ]; then
 		wt_path=$(printf '%s\n' "$wt_map" | awk -F'\t' -v b="$branch" '$2 == b { print $1; exit }')
+	fi
+
+	# Why a branch qualified is informational, and belongs on stderr: stdout
+	# stays the machine-readable "<branch> <commit>" contract.
+	if [ $viaPr -eq 1 ] && [ $q -eq 0 ]; then
+		echo >&2 "  $branch: squash/rebase-merged via GitHub PR"
 	fi
 
 	if [ $dryRun -eq 1 ]; then
@@ -153,9 +214,20 @@ while read branch commit; do
 			[ $q -eq 0 ] && echo >&2 "  skip $branch (in worktree $wt_path; use -w)"
 			continue
 		fi
-		if ! git worktree remove "$wt_path" 2>/dev/null; then
+		# Removal refuses while anything untracked or modified is present. -f
+		# discards it; without -f, say what is in the way rather than leaving
+		# the branch mysteriously unswept.
+		rmOk=0
+		git worktree remove "$wt_path" 2>/dev/null || rmOk=$?
+		if [ $rmOk -ne 0 ] && [ $force -eq 1 ]; then
+			rmOk=0
+			git worktree remove --force "$wt_path" 2>/dev/null || rmOk=$?
+		fi
+		if [ $rmOk -ne 0 ]; then
 			if [ -d "$wt_path" ]; then
-				echo >&2 "  warning: could not remove worktree $wt_path"
+				echo >&2 "  warning: could not remove worktree $wt_path" \
+					"($(git -C "$wt_path" status --porcelain 2>/dev/null | \
+					grep -c '') local change(s); use -f)"
 				continue
 			fi
 			# Directory already gone (e.g. removed with a parent worktree);
@@ -181,3 +253,47 @@ while read branch commit; do
 		echo >&2 "  warning: could not delete $branch"
 	fi
 done
+
+# Detached-HEAD worktrees hold no branch ref, so the refs/heads walk above
+# never sees them — they accumulate indefinitely. With nothing but a commit to
+# test, the tree comparison is the only signal available (a bare commit has no
+# branch name to match a pull request against). Nothing is deleted but the
+# worktree itself; the commit stays reachable from the reflog.
+if [ $wt -eq 1 ]; then
+	git worktree list --porcelain | awk -v main="$main_wt" '
+		/^worktree / { p = substr($0, 10) }
+		/^detached$/ { if (p != main) print p }
+	' | while read -r dPath; do
+		[ -d "$dPath" ] || continue
+		dHead=$(git -C "$dPath" rev-parse HEAD 2>/dev/null) || continue
+		dShort=$(git -C "$dPath" rev-parse --short HEAD 2>/dev/null)
+
+		dStatus=0
+		isMergedInto "$target" "$dHead" || dStatus=$?
+		if [ $dStatus -ne 0 ]; then
+			if [ $v -eq 1 ]; then
+				echo >&2 "  skip $dPath (detached, unmerged)"
+			fi
+			continue
+		fi
+
+		if [ $dryRun -eq 1 ]; then
+			echo "(detached) $dShort (worktree: $dPath)"
+			continue
+		fi
+
+		rmOk=0
+		git worktree remove "$dPath" 2>/dev/null || rmOk=$?
+		if [ $rmOk -ne 0 ] && [ $force -eq 1 ]; then
+			rmOk=0
+			git worktree remove --force "$dPath" 2>/dev/null || rmOk=$?
+		fi
+		if [ $rmOk -eq 0 ]; then
+			echo "(detached) $dShort (worktree: $dPath)"
+		elif [ -d "$dPath" ]; then
+			echo >&2 "  warning: could not remove worktree $dPath" \
+				"($(git -C "$dPath" status --porcelain 2>/dev/null | \
+				grep -c '') local change(s); use -f)"
+		fi
+	done
+fi

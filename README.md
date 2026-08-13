@@ -334,14 +334,32 @@ new invocation.
 
 ### sweep
 
-`git sweep [-n] [-w] [-t <target>] [-q|-v]`
+`git sweep [-n] [-w] [-f] [-p|-P] [-t <target>] [-q|-v]`
 
 Find and delete local branches whose changes are fully present in the
 target branch. Unlike `git branch --merged`, this detects rebase-merges
 and squash-merges by simulating a merge and comparing the resulting tree.
 
+That tree comparison only holds while the target still merges the branch
+cleanly. Once the target advances past a squash-merged branch the simulation
+conflicts, and the branch reads as unmerged forever even though every line of
+it shipped. So when the comparison fails, GitHub is asked whether a merged
+pull request exists for the branch; it is swept only if it carries no commits
+beyond the commit that was merged, so anything pushed after the merge keeps
+the branch alive. Disable with `-P` or `funcs.sweep.pr = false`. It costs one
+batched `gh` call per sweep and no-ops when `gh` is unavailable or the remote
+isn't GitHub.
+
 For each deleted branch, prints the branch name and head commit to stdout.
 Branches checked out in worktrees are skipped unless `-w` is set.
+
+Worktree removal refuses to discard uncommitted or untracked files, so a
+single stray `.idea/` strands an otherwise-sweepable worktree; the warning
+names how many local changes are in the way, and `-f` overrides. With `-w`,
+worktrees with a detached `HEAD` are swept too — holding no branch ref, they
+are invisible to the branch walk and otherwise accumulate indefinitely. Only
+the worktree goes; the commit stays reachable via the reflog. The main
+worktree is never touched.
 
 If a deleted branch is the stack parent (`branch.<name>.funcsBase`) of other
 local branches, each child is re-pointed to the deleted branch's own parent
@@ -349,7 +367,13 @@ local branches, each child is re-pointed to the deleted branch's own parent
 (respect `-q`) — or, in dry-run mode, what would be re-pointed.
 
 * `-n` (dry-run) Show what would be deleted without deleting.
-* `-w` (worktrees) Also remove worktrees for merged branches.
+* `-w` (worktrees) Also remove worktrees for merged branches, and sweep
+	merged detached-`HEAD` worktrees.
+* `-f` (force) Remove worktrees even when they hold uncommitted or untracked
+	files. Implies `-w`.
+* `-p` (pull requests) Consult GitHub for squash-merged branches (default
+	when `gh` is available).
+* `-P` (no pull requests) Compare trees only; never call GitHub.
 * `-t <target>` Branch or ref to compare against (default: primary
 	remote/branch).
 * `-q` (quiet) Suppress informational output.

@@ -191,4 +191,48 @@ isMergedInto() (
 	return 0
 )
 
+# Prints one "<headRefName>\t<headRefOid>" line per merged pull request on the
+# repository's GitHub remote, newest first. Exits 1 when `gh` is missing,
+# unauthenticated, or the remote isn't GitHub — callers treat that as "no PR
+# data" and fall back to the tree comparison alone.
+#
+# One batched call rather than one per branch: a sweep over a repo with a
+# hundred branches is a single request either way.
+# loadMergedPrMap [<limit>]
+loadMergedPrMap() (
+	limit=${1:-1000}
+	command -v gh >/dev/null 2>&1 || return 1
+	gh pr list --state merged --limit "$limit" \
+		--json headRefName,headRefOid \
+		--jq '.[] | [.headRefName, .headRefOid] | @tsv' 2>/dev/null
+)
+
+# Returns success iff <branch> is fully contained in <oid>, the head commit of
+# a merged pull request (as reported by loadMergedPrMap).
+#
+# This is the squash/rebase-merge escape hatch. isMergedInto compares trees,
+# so it stops recognising a squash-merged branch the moment the target picks up
+# any unrelated change — the branch then looks conflicted forever even though
+# every line of it shipped. Asking what GitHub actually merged is the only
+# reliable signal once history has been rewritten.
+#
+# The containment test is what keeps this safe: commits added to the branch
+# *after* its PR merged leave it non-empty against <oid>, so it is kept. That
+# also covers branch-name reuse — a recycled name carries new commits and fails
+# the test.
+# isMergedViaPR <oid> <branch>
+isMergedViaPR() (
+	oid=$1
+	branch=$2
+	[ -n "$oid" ] || return 1
+	# The merged commit is usually absent locally: merging deletes the remote
+	# branch and the next prune drops the objects. Fetch it before comparing.
+	if ! git cat-file -e "$oid^{commit}" 2>/dev/null; then
+		remote=$(getPrimaryRemote -o)
+		git fetch --quiet "${remote:-origin}" "$oid" 2>/dev/null || return 1
+	fi
+	count=$(git rev-list --count "$oid..$branch" 2>/dev/null) || return 1
+	[ "$count" = "0" ]
+)
+
 # vim:ft=sh

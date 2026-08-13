@@ -33,6 +33,13 @@ Each command checks its own verbose key before falling back to
 | `funcs.contains.verbose` | git-contains |
 | `funcs.new-tree.verbose` | git-new-tree |
 | `funcs.stack.verbose` | git-stack |
+| `funcs.sweep.verbose` | git-sweep |
+
+## Sweep Options (`git sweep`)
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `funcs.sweep.pr` | bool | `true` | Consult GitHub for squash- and rebase-merged branches when the tree comparison says unmerged. A branch is swept on this evidence only if a merged pull request exists for it *and* the local branch carries no commits beyond the one GitHub merged, so work added after the merge is always kept. Costs one batched `gh pr list` call per sweep; degrades silently to tree-comparison-only when `gh` is missing, unauthenticated, or the remote isn't GitHub. Override per-run with `-p` / `-P`. |
 
 ## Worktree Options (`git new-tree`)
 
