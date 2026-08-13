@@ -21,9 +21,18 @@ indent() (
 		return 1
 	}
 	space=$1; shift
+	[ $# -gt 0 ] || return 0
 	maxWidth=$(termWidth) || maxWidth=60
 	width=$(expr "$maxWidth" - "$space")
-	[ $# -gt 0 ] && printf '%s\n' "$*" | fold -sw "$width" | pr -to "$space"
+	# Help text is written across several source lines and indented to match
+	# the surrounding code, so it arrives carrying the newlines and tabs of
+	# that layout — which would otherwise wrap straight into the output.
+	# Flatten them first, while the escapes callers embed (\n for a paragraph
+	# break, \033 for bold) are still literal backslash pairs, so only real
+	# layout whitespace is collapsed. %b then renders those escapes; %s would
+	# print them verbatim.
+	text=$(printf '%s' "$*" | tr '\n\t' '  ' | tr -s ' ')
+	printf '%b\n' "$text" | fold -sw "$width" | pr -to "$space"
 )
 
 heading() {

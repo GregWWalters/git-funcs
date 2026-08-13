@@ -35,7 +35,7 @@ helpTxt() {
 	option '-v' '(verbose) Print additional information'
 	option '-h' '(help) Print this help'
 
-	echo "\n"
+	printf '\n'
 }
 
 case "$1" in
