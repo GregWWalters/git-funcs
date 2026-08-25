@@ -258,6 +258,40 @@ rebase conflict partway through the cascade, the conflicting branch is left
 mid-rebase (resolve or abort as usual); re-running `git resync` afterwards
 finishes the rest of the stack.
 
+### pin
+
+`git pin [-q|-v] [-u] [<base>]`
+
+Record what the current branch is maintained against — the base `git resync`
+rebases it onto, and the one `git stack` and `git sweep` consult.
+
+With no argument, pins the branch with **no base at all**: `resync` reports it
+and never rebases it, and `sweep` never deletes it. This is the command for a
+branch that must not pick up the primary.
+
+With `<base>`, pins to that ref instead — a tag, a remote-tracking ref such as
+`origin/release/2.4`, or a sha; `resync` rebases onto it, fetching its remote
+first. A local branch is recorded as a stack parent, the same relationship
+`git new-branch -b` creates.
+
+With `-u`, unpins: the base is removed and the branch follows the primary
+again.
+
+```sh
+git pin                        # never rebase this branch
+git pin origin/release/2.4     # track a release line, not trunk
+git pin feature/api            # stack it on another branch
+git pin -u                     # back to following trunk
+```
+
+Refuses to pin the primary branch, a detached HEAD, a branch to itself, a base
+that doesn't resolve, or a stack parent that would close a cycle.
+
+* `-u` (unpin) Remove the recorded base.
+* `-q` (quiet) Suppress writing to stdout.
+* `-v` (verbose) Also print the resulting config value.
+* `-h` (help) Print this help.
+
 ### stack
 
 `git stack [-q|-v]`
@@ -485,7 +519,7 @@ For a hotfix or backport that must sit on a frozen line, not trunk.
 git new-branch -b origin/release/2.4 hotfix/2.4.1
 
 # or for a branch that already exists
-git config --local branch.hotfix/2.4.1.funcsBase origin/release/2.4
+git pin origin/release/2.4
 ```
 
 `git resync` now rebases onto `origin/release/2.4` instead of trunk, and
@@ -510,8 +544,8 @@ For a branch that must not pick up trunk at all — a long-lived release
 branch, a vendored fork, anything deliberately frozen.
 
 ```sh
-# pin an existing branch
-git config --local branch.release/2.4.funcsBase none
+# pin the branch you're on
+git pin
 
 # or create one already pinned (it still starts from fresh trunk)
 git new-branch -b none vendor/patched-deps
@@ -541,10 +575,11 @@ named `none` must be written `refs/heads/none`.
 ### Inspecting and undoing
 
 ```sh
-git stack                                        # what is this branch based on?
-git config --get branch.<name>.funcsBase         # the raw value
-git config --local --unset branch.<name>.funcsBase   # back to following trunk
-git config --local branch.<name>.funcsBase <new-base>  # re-point it
+git stack              # what is this branch based on?
+git pin -u             # unpin: back to following trunk
+git pin <new-base>     # re-point it
+
+git config --get branch.<name>.funcsBase   # the raw value, for any branch
 ```
 
 Git deletes the whole `branch.<name>` section — `funcsBase` included — when

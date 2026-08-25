@@ -16,7 +16,7 @@ section. Use `git config --local` to set them.
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `branch.<name>.funcsBase` | string | What local branch `<name>` is maintained against. Read by `git resync` (what to rebase onto), `git stack` (what to show), and `git sweep` (what to re-point children to, and what not to delete). Set by `git new-branch -b <base>`, or by hand with `git config --local branch.<name>.funcsBase <value>`. |
+| `branch.<name>.funcsBase` | string | What local branch `<name>` is maintained against. Read by `git resync` (what to rebase onto), `git stack` (what to show), and `git sweep` (what to re-point children to, and what not to delete). Set by `git pin` on the current branch, by `git new-branch -b <base>` at creation, or by hand with `git config --local branch.<name>.funcsBase <value>`. |
 
 `funcsBase` has four possible answers, and every branch has one:
 
@@ -45,14 +45,20 @@ Once a branch is pinned, the rest of the workflow follows automatically:
 
 ```sh
 # never pull trunk into this branch again
-git config --local branch.release/2.4.funcsBase none
+git pin
 
 # or track a frozen release line instead of trunk
-git config --local branch.hotfix/2.4.1.funcsBase origin/release/2.4
+git pin origin/release/2.4
 
 # or create one already pinned
 git new-branch -b none vendor/patched-deps
+
+# undo
+git pin -u
 ```
+
+`git pin` is the front end for this key; the equivalent raw form is
+`git config --local branch.<name>.funcsBase <value>`.
 
 ### Dangling bases
 
@@ -83,6 +89,7 @@ Each command checks its own verbose key before falling back to
 | `funcs.contains.verbose` | git-contains |
 | `funcs.new-tree.verbose` | git-new-tree |
 | `funcs.stack.verbose` | git-stack |
+| `funcs.pin.verbose` | git-pin |
 | `funcs.sweep.verbose` | git-sweep |
 
 ## Sweep Options (`git sweep`)
