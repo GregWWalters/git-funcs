@@ -19,13 +19,21 @@ helpTxt() {
 	primary remote, and if not found, return the first remote associated with the
 	repository."
 	body "To change the primary remote, use git-refresh -s <remote>."
-	body "If the current branch is part of a stack (see branch.<name>.funcsBase,
-	set by 'git new-branch -b'), resync restacks the whole stack: the root is
-	rebased onto the fetched primary, and every descendant is rebased onto its
-	(possibly moved) parent, in order. A parent already merged into primary
-	(including via squash/rebase merge) is skipped over rather than replayed,
-	and the child's funcsBase is re-pointed past it. Use 'git stack' to inspect
-	the stack."
+	body "What a branch is maintained against is recorded by
+	branch.<name>.funcsBase (see 'git new-branch -b'). Unset means the remote
+	primary, which is the default. A local branch means the branch is stacked
+	on it. Any other ref (tag, remote-tracking ref, sha) is a pinned base:
+	resync rebases onto that ref instead of the primary. The literal value
+	'none' means the branch has no base at all - resync reports it and leaves
+	the branch alone, so 'git resync' stays safe to run unconditionally on
+	every branch."
+	body "If the current branch is part of a stack, resync restacks the whole
+	stack: the root is rebased onto whatever it is maintained against, and
+	every descendant is rebased onto its (possibly moved) parent, in order.
+	A parent already merged into the stack's target (including via
+	squash/rebase merge) is skipped over rather than replayed, and the child's
+	funcsBase is re-pointed past it, inheriting the parent's own base. Use
+	'git stack' to inspect the stack."
 
 	heading 'OPTIONS'
 	option '-q' '(quiet) Suppress writing to stdout. Overrides .gitconfig
@@ -110,26 +118,46 @@ cascadeFail() {
 	exit 1
 }
 
-# Find the stack root by walking funcsBase upward from $1. A dangling parent
-# (branch deleted) ends the walk there: the stale link is unset (with a
-# warning) and that branch becomes the root. Cycles are a hard error. Sets
-# $root.
+# Find the stack root by walking funcsBase upward from $1. The walk stops at
+# the first branch whose base is not another local branch: that branch is the
+# root, and $rootKind/$rootBase record what the whole stack is maintained
+# against (see resolveBase in helpers). Cycles are a hard error. Sets $root,
+# $rootKind, $rootBase.
+#
+# A dangling base is handled by how it was written. A bare name is taken to be
+# a stack parent that was deleted by hand: the stale link is unset (with a
+# warning) and the branch becomes a primary-based root, as before. A qualified
+# base (refs/... or <remote>/...) was a deliberate pin, so it is reported but
+# never rewritten - silently falling back to the primary is the one thing a
+# pin exists to prevent - and the branch is left unrebased.
 findRoot() {
 	b=$1
 	seen=" $b "
 	while :; do
-		p=$(getBranchBase "$b")
-		if [ -z "$p" ]; then
-			root=$b
-			return 0
-		fi
-		if ! git rev-parse --verify --quiet "refs/heads/$p" >/dev/null 2>&1; then
-			echo >&2 "warning: branch '$b' has funcsBase '$p', which no longer" \
-				"exists; treating '$b' as the stack root and clearing the stale link"
-			git config --local --unset "branch.$b.funcsBase"
-			root=$b
-			return 0
-		fi
+		kv=$(resolveBase "$b")
+		kind=${kv%% *}
+		val=${kv#* }
+		case "$kind" in
+			primary|none|ref)
+				root=$b; rootKind=$kind; rootBase=$val
+				return 0
+				;;
+			dangling)
+				if baseIsQualified "$val"; then
+					echo >&2 "warning: branch '$b' has funcsBase '$val', which does" \
+						"not resolve; leaving the pin recorded and not rebasing '$b'." \
+						"Fix or unset it with 'git config --local branch.$b.funcsBase'."
+					root=$b; rootKind=none; rootBase=$val
+					return 0
+				fi
+				echo >&2 "warning: branch '$b' has funcsBase '$val', which no longer" \
+					"exists; treating '$b' as the stack root and clearing the stale link"
+				git config --local --unset "branch.$b.funcsBase"
+				root=$b; rootKind=primary; rootBase="-"
+				return 0
+				;;
+		esac
+		p=$val
 		case "$seen" in
 			*" $p "*)
 				echo >&2 "git-resync: cycle detected in funcsBase chain" \
@@ -167,16 +195,45 @@ buildStack() {
 
 findRoot "$current"
 
+# What the stack is ultimately maintained against. Empty means nothing: the
+# root is pinned, so it is never rebased and "has this landed?" has no answer
+# to check against.
+case "$rootKind" in
+	primary) targetRef="$remote/$branch" ;;
+	ref)     targetRef="$rootBase" ;;
+	*)       targetRef="" ;;
+esac
+
 stackfile=$(mktemp)
 oldshafile=$(mktemp)
 datafile=$(mktemp)
 trap 'rm -f "$stackfile" "$oldshafile" "$datafile"' EXIT
 
+buildStack "$root" > "$stackfile"
+
+# A lone pinned branch has nothing to sync against and no descendants to
+# restack: say so and stop, without even fetching.
+if [ -z "$targetRef" ] && [ "$(awk 'END{print NR}' "$stackfile")" -eq 1 ]; then
+	if [ "$rootBase" = "-" ]; then
+		echo >&2 "notice: '$root' has no base (funcsBase = none); not rebasing."
+	fi
+	exit 0
+fi
+
 {
 	git fetch "$remote"
+	if [ "$rootKind" = "ref" ]; then
+		pinRemote=$(baseRemote "$rootBase")
+		if [ -n "$pinRemote" ] && [ "$pinRemote" != "$remote" ]; then
+			git fetch "$pinRemote"
+		fi
+	fi
 } >&4
 
-buildStack "$root" > "$stackfile"
+if [ -z "$targetRef" ] && [ "$rootBase" = "-" ]; then
+	echo >&2 "notice: '$root' has no base (funcsBase = none); not rebasing it," \
+		"but restacking its descendants onto it."
+fi
 
 : > "$oldshafile"
 : > "$datafile"
@@ -186,7 +243,7 @@ while read -r name parent; do
 	psha=""
 	if [ "$parent" != "-" ]; then
 		psha=$(awk -F'\t' -v n="$parent" '$1==n{print $2; exit}' "$oldshafile")
-		if isMergedInto "$remote/$branch" "$psha"; then merged=1; fi
+		if [ -n "$targetRef" ] && isMergedInto "$targetRef" "$psha"; then merged=1; fi
 	fi
 	printf '%s\t%s\n' "$name" "$sha" >> "$oldshafile"
 	printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$parent" "$sha" "$merged" "$psha" >> "$datafile"
@@ -195,9 +252,13 @@ done < "$stackfile"
 {
 	while IFS='	' read -r name parent oldsha merged psha; do
 		if [ "$parent" = "-" ]; then
-			git rebase --autostash -X patience "$remote/$branch" "$name" \
+			if [ -z "$targetRef" ]; then
+				if [ $v -eq 1 ]; then echo "$name has no base; not rebasing it"; fi
+				continue
+			fi
+			git rebase --autostash -X patience "$targetRef" "$name" \
 				|| cascadeFail "$name"
-			if [ $v -eq 1 ]; then echo "restacked $name onto $remote/$branch"; fi
+			if [ $v -eq 1 ]; then echo "restacked $name onto $targetRef"; fi
 			continue
 		fi
 
@@ -209,8 +270,10 @@ done < "$stackfile"
 		if [ "$merged" = "1" ]; then
 			gp=$(awk -F'\t' -v n="$parent" '$1==n{print $2; exit}' "$datafile")
 			if [ "$gp" = "-" ]; then
-				newbase="$remote/$branch"
-				newcfg=""
+				# Skipping past the root: the child inherits the root's own
+				# base verbatim, so a pinned stack stays pinned.
+				newbase="$targetRef"
+				if [ "$rootKind" = "ref" ]; then newcfg="$rootBase"; else newcfg=""; fi
 			else
 				newbase="refs/heads/$gp"
 				newcfg="$gp"

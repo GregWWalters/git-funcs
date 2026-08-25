@@ -161,15 +161,18 @@ configValueOn() (
 	fi
 )
 
-# Returns the configured stack parent of a branch (branch.<branch>.funcsBase),
-# or nothing if unset. Exits 0 either way.
+# Returns the raw recorded base of a branch (branch.<branch>.funcsBase), or
+# nothing if unset. Exits 0 either way. Use resolveBase to interpret it.
 # getBranchBase <branch>
 getBranchBase() (
 	branch=$1
 	git config --local --get "branch.$branch.funcsBase" 2>/dev/null || :
 )
 
-# Prints, one per line, the local branch names whose funcsBase is <branch>.
+# Prints, one per line, the local branch names stacked on <branch> — those
+# whose funcsBase names it, spelled either bare or as refs/heads/<branch>.
+# The `none` sentinel is never a parent, so branches pinned with it are not
+# children of a branch that happens to be named "none".
 # Exits 0 whether or not any are found.
 # getBranchChildren <branch>
 getBranchChildren() (
@@ -181,8 +184,81 @@ getBranchChildren() (
 	while read -r key val; do
 		name=${key#branch.}
 		name=${name%.funcsbase}
-		if [ "$val" = "$parent" ]; then echo "$name"; fi
+		case "$(printf '%s' "$val" | tr '[:upper:]' '[:lower:]')" in
+			none) continue ;;
+		esac
+		if [ "$val" = "$parent" ] || [ "$val" = "refs/heads/$parent" ]; then
+			echo "$name"
+		fi
 	done || :
+)
+
+# Prints the kind and value of a branch's recorded base
+# (branch.<branch>.funcsBase) as "<kind> <value>". The base is what the branch
+# is maintained against; there are four answers:
+#
+#   primary   -     unset: maintained against the remote primary (the default)
+#   branch    <b>   a local branch: a stack parent; the restack cascade applies
+#   ref       <r>   any other commit-ish (tag, remote-tracking ref, sha): a
+#                   pinned base to rebase onto, with no cascade above it
+#   none      -     pinned with no base at all: never rebased onto anything
+#   dangling  <v>   recorded, but resolves to nothing
+#
+# The literal value `none` (any case) is the no-base sentinel. A local branch
+# actually named "none" must be recorded as `refs/heads/none`.
+# resolveBase <branch>
+resolveBase() (
+	raw=$(getBranchBase "$1")
+	if [ -z "$raw" ]; then echo "primary -"; return 0; fi
+	case "$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')" in
+		none) echo "none -"; return 0 ;;
+	esac
+	case "$raw" in
+		refs/heads/*)
+			if git rev-parse --verify --quiet "$raw" >/dev/null 2>&1; then
+				echo "branch ${raw#refs/heads/}"
+				return 0
+			fi
+			;;
+		*)
+			if git rev-parse --verify --quiet "refs/heads/$raw" >/dev/null 2>&1; then
+				echo "branch $raw"
+				return 0
+			fi
+			;;
+	esac
+	if git rev-parse --verify --quiet "$raw^{commit}" >/dev/null 2>&1; then
+		echo "ref $raw"
+		return 0
+	fi
+	echo "dangling $raw"
+)
+
+# Returns success if <value> is a qualified base — one written as a ref path
+# (refs/...) or under a configured remote (<remote>/...) — rather than a bare
+# local branch name. This is what distinguishes an unresolvable base that was
+# a deleted stack parent (safe to repair by falling back to the primary) from
+# a pinned base that has vanished (never rewritten, because silently falling
+# back to the primary is exactly what the pin exists to prevent).
+# baseIsQualified <value>
+baseIsQualified() (
+	v=$1
+	case "$v" in
+		refs/*) return 0 ;;
+	esac
+	first=${v%%/*}
+	[ "$first" != "$v" ] || return 1
+	git config --get "remote.$first.url" >/dev/null 2>&1
+)
+
+# Prints the remote a pinned base ref lives on, or nothing if it is not
+# remote-tracking. Always exits 0.
+# baseRemote <value>
+baseRemote() (
+	v=${1#refs/remotes/}
+	first=${v%%/*}
+	[ "$first" != "$v" ] || return 0
+	if git config --get "remote.$first.url" >/dev/null 2>&1; then echo "$first"; fi
 )
 
 # Returns success iff simulating a merge of <branch> into <target> would be a

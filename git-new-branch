@@ -18,16 +18,26 @@ helpTxt() {
 	configuration for the primary remote, and if not found, use the first remote
 	associated with the repository. To change the primary remote, use git-refresh
 	-s <remote>."
-	body "If -b <base> is given, the new branch is based on the local branch
-	<base> instead of the primary, and branch.<branch-name>.funcsBase is set
-	to <base> to record the stacking relationship (used by git resync, git
-	stack, and git sweep). Use '.' or '@' for <base> to mean the current
-	branch. -b cannot be combined with a <remote> argument."
+	body "If -b <base> is given, the new branch is based on <base> instead of
+	the primary, and branch.<branch-name>.funcsBase is set to <base> to record
+	it (used by git resync, git stack, and git sweep). <base> may be:"
+	body "a local branch - the new branch is stacked on it, and resync
+	restacks the two together;"
+	body "any other ref (tag, remote-tracking ref, sha) - a pinned base: the
+	new branch starts there and resync rebases it onto that ref rather than
+	the primary;"
+	body "'none' - the new branch starts from the primary but is pinned with
+	no base at all, so resync never rebases it. Use this for a branch that
+	must not pick up trunk;"
+	body "'.' or '@' - the current branch."
+	body "-b cannot be combined with a <remote> argument, except for
+	'-b none', whose start point is the primary and so still honours it."
 
 	heading 'OPTIONS'
-	option '-b <base>' '(base) Base the new branch on local branch <base>
-		instead of the primary, recording it as the branch'\''s stack parent.
-		'\''.'\'' or '\''@'\'' means the current branch.'
+	option '-b <base>' '(base) Base the new branch on <base> instead of the
+		primary, recording it as the branch'\''s base: a local branch stacks on
+		it, any other ref pins to it, and '\''none'\'' pins with no base so the
+		branch is never rebased. '\''.'\'' or '\''@'\'' means the current branch.'
 	option '-s' '(stash) Automatically stash uncommitted changes before checking
 	out the branch and pop after'
 	option '-q' '(quiet) Suppress writing to stdout. Overrides .gitconfig
@@ -80,29 +90,42 @@ fi
 
 remoteArg=$2
 
-if [ -n "$baseArg" ] && [ -n "$remoteArg" ]; then
-	echo >&2 "git new-branch: -b <base> cannot be combined with a <remote> argument."
-	exit 1
+# base is what gets recorded in funcsBase; startPoint is what the branch is
+# actually cut from. They differ only for '-b none', which records no base but
+# still has to start somewhere - the primary, same as a plain new-branch.
+base="" startPoint=""
+if [ -n "$baseArg" ]; then
+	case "$(printf '%s' "$baseArg" | tr '[:upper:]' '[:lower:]')" in
+		none) base="none" ;;
+	esac
+	if [ -z "$base" ]; then
+		case "$baseArg" in
+			"."|"@")
+				base=$(git branch --show-current 2>/dev/null || :)
+				if [ -z "$base" ]; then
+					echo >&2 "git new-branch: -b $baseArg requires a checked-out branch (detached HEAD?)."
+					exit 1
+				fi
+				;;
+			*)
+				base=$baseArg
+				;;
+		esac
+		if git rev-parse --verify --quiet "refs/heads/$base" >/dev/null 2>&1; then
+			startPoint=$base
+		elif git rev-parse --verify --quiet "$base^{commit}" >/dev/null 2>&1; then
+			startPoint=$base
+		else
+			echo >&2 "git new-branch: base '$base' does not resolve to a branch or ref."
+			exit 1
+		fi
+	fi
 fi
 
-base=""
-if [ -n "$baseArg" ]; then
-	case "$baseArg" in
-		"."|"@")
-			base=$(git branch --show-current 2>/dev/null || :)
-			if [ -z "$base" ]; then
-				echo >&2 "git new-branch: -b $baseArg requires a checked-out branch (detached HEAD?)."
-				exit 1
-			fi
-			;;
-		*)
-			base=$baseArg
-			;;
-	esac
-	if ! git rev-parse --verify --quiet "refs/heads/$base" >/dev/null 2>&1; then
-		echo >&2 "git new-branch: base branch '$base' does not exist locally."
-		exit 1
-	fi
+if [ -n "$baseArg" ] && [ "$base" != "none" ] && [ -n "$remoteArg" ]; then
+	echo >&2 "git new-branch: -b <base> cannot be combined with a <remote>" \
+		"argument (except -b none, which starts from the primary)."
+	exit 1
 fi
 
 # redirect output of the next block
@@ -116,8 +139,8 @@ fi
 		exit 1
 	fi
 	if [ "$modified" -gt 0 ]; then git stash push; fi
-	if [ -n "$base" ]; then
-		git checkout "$base"
+	if [ -n "$startPoint" ]; then
+		git checkout "$startPoint"
 	else
 		git co-primary ${remoteArg:+"$remoteArg"}
 	fi

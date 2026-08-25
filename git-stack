@@ -14,13 +14,19 @@ helpTxt() {
 	body 'Print the tree of branches the current branch is stacked with, as
 	recorded by branch.<name>.funcsBase (set by "git new-branch -b"). Root
 	first, one branch per line, indented two spaces per depth beneath the
-	implicit primary base.'
+	base line.'
+	body 'The first line is what the stack is maintained against: the remote
+	primary by default, or the pinned ref recorded in the root'\''s funcsBase,
+	or "(no base)" when the root is pinned with funcsBase = none and is never
+	rebased.'
 	body 'If the current branch is not part of a stack, prints
-	"<branch> (not stacked; base: <remote>/<primary>)" instead.'
+	"<branch> (not stacked; base: <remote>/<primary>)" instead - or the
+	branch'\''s pinned base in place of the primary.'
 	body 'Markers: " *" the current branch; " [merged]" the branch is fully
-	contained in the primary (including via squash/rebase merge); " [base
-	missing]" the branch'\''s recorded parent no longer exists (repaired
-	automatically the next time "git resync" runs on this stack).'
+	contained in the stack'\''s target (including via squash/rebase merge);
+	" [base missing]" the branch'\''s recorded base no longer resolves (a bare
+	parent name is repaired automatically the next time "git resync" runs on
+	this stack; a pinned ref is left for you to fix).'
 	body 'This command never modifies anything, including a dangling
 	funcsBase link (unlike "git resync", which repairs it).'
 
@@ -64,35 +70,57 @@ fi
 
 primary=$(git primary)
 
-myBase=$(getBranchBase "$current" 2>/dev/null || :)
+myKv=$(resolveBase "$current")
+myKind=${myKv%% *}
+myVal=${myKv#* }
 myChildren=$(getBranchChildren "$current" 2>/dev/null || :)
 
-if [ -z "$myBase" ] && [ -z "$myChildren" ]; then
-	[ $q -eq 0 ] && echo "$current (not stacked; base: $primary)"
-	exit 0
+if [ -z "$myChildren" ]; then
+	case "$myKind" in
+		primary)
+			[ $q -eq 0 ] && echo "$current (not stacked; base: $primary)"
+			exit 0
+			;;
+		none)
+			[ $q -eq 0 ] && echo "$current (pinned; no base)"
+			exit 0
+			;;
+		ref)
+			[ $q -eq 0 ] && echo "$current (not stacked; pinned base: $myVal)"
+			exit 0
+			;;
+	esac
 fi
 
-# Find the stack root by walking funcsBase upward from $1, read-only: warns
-# (but does not repair) a dangling parent, and errors on a cycle. Sets
-# $root, $rootDangling (0/1), $rootMissingBase.
+# Find the stack root by walking funcsBase upward from $1, read-only: the walk
+# stops at the first branch whose base is not another local branch, recording
+# what the stack is maintained against in $rootKind/$rootBase. Warns (but does
+# not repair) a dangling base, and errors on a cycle. Sets $root, $rootKind,
+# $rootBase, $rootDangling (0/1), $rootMissingBase.
 findRoot() {
 	b=$1
 	seen=" $b "
 	rootDangling=0
 	rootMissingBase=""
 	while :; do
-		p=$(getBranchBase "$b")
-		if [ -z "$p" ]; then
-			root=$b
-			return 0
-		fi
-		if ! git rev-parse --verify --quiet "refs/heads/$p" >/dev/null 2>&1; then
-			echo >&2 "warning: branch '$b' has funcsBase '$p', which no longer exists"
-			root=$b
-			rootDangling=1
-			rootMissingBase=$p
-			return 0
-		fi
+		kv=$(resolveBase "$b")
+		kind=${kv%% *}
+		p=${kv#* }
+		case "$kind" in
+			primary|none|ref)
+				root=$b; rootKind=$kind; rootBase=$p
+				return 0
+				;;
+			dangling)
+				echo >&2 "warning: branch '$b' has funcsBase '$p', which no longer exists"
+				root=$b
+				rootKind=none
+				rootBase=$p
+				rootDangling=1
+				rootMissingBase=$p
+				return 0
+				;;
+		esac
 		case "$seen" in
 			*" $p "*)
 				echo >&2 "git-stack: cycle detected in funcsBase chain" \
@@ -107,8 +135,13 @@ findRoot() {
 
 findRoot "$current"
 
-# target ref for [merged] checks
-targetRef=$primary
+# What the stack is maintained against, and the ref [merged] is checked
+# against. Empty means the root is pinned to nothing, so neither applies.
+case "$rootKind" in
+	primary) targetRef=$primary ;;
+	ref)     targetRef=$rootBase ;;
+	*)       targetRef="" ;;
+esac
 
 printSeen=" $root "
 
@@ -118,7 +151,9 @@ printNode() {
 	sha=$(git rev-parse --short "refs/heads/$name")
 	marker=""
 	[ "$name" = "$current" ] && marker="$marker *"
-	if isMergedInto "$targetRef" "refs/heads/$name"; then marker="$marker [merged]"; fi
+	if [ -n "$targetRef" ] && isMergedInto "$targetRef" "refs/heads/$name"; then
+		marker="$marker [merged]"
+	fi
 	if [ "$name" = "$root" ] && [ "$rootDangling" -eq 1 ]; then
 		marker="$marker [base missing]"
 	fi
@@ -141,5 +176,11 @@ printNode() {
 
 [ $q -eq 1 ] && exit 0
 
-echo "$targetRef"
+if [ -n "$targetRef" ]; then
+	echo "$targetRef"
+elif [ "$rootDangling" -eq 1 ]; then
+	echo "$rootMissingBase (unresolved)"
+else
+	echo "(no base)"
+fi
 printNode "$root" 1

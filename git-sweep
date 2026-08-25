@@ -27,6 +27,10 @@ helpTxt() {
 	untracked files (a stray .idea/ is enough to strand an otherwise merged
 	worktree) — use -f to override. With -w, worktrees with a detached HEAD are
 	swept too; holding no branch ref, they are otherwise invisible here.'
+	body 'Branches with a pinned base (branch.<name>.funcsBase set to "none" or
+	to a ref rather than a local branch) are always skipped: they are
+	deliberately maintained outside the primary, so the target containing them
+	does not mean they have landed. Delete them by hand when you mean to.'
 
 	heading 'OPTIONS'
 	option '-n' '(dry-run) Show what would be deleted without deleting.'
@@ -146,6 +150,15 @@ git for-each-ref --format='%(refname:short) %(objectname:short)' refs/heads/ | \
 while read branch commit; do
 	[ "$branch" = "$current" ] && continue
 	[ "$branch" = "$skip_branch" ] && continue
+
+	# Never sweep a branch that is pinned off the primary - "contained in the
+	# target" is not the question that branch is being maintained against.
+	bKind=$(resolveBase "$branch")
+	bKind=${bKind%% *}
+	if [ "$bKind" = "none" ] || [ "$bKind" = "ref" ]; then
+		if [ $v -eq 1 ]; then echo >&2 "  skip $branch (pinned base)"; fi
+		continue
+	fi
 
 	# Simulate merge; conflicts mean the branch is not cleanly merged, and a
 	# differing tree means the branch has unmerged changes. isMergedInto

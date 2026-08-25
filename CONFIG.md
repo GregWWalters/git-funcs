@@ -12,11 +12,61 @@ section. Use `git config --local` to set them.
 | `funcs.verbose` | bool | Enable verbose output for all commands |
 | `funcs.echo` | bool | Echo the primary branch after operations |
 
-## Stacked-diff Options
+## Branch Bases (stacked diffs and pinned branches)
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `branch.<name>.funcsBase` | string | The stack parent of local branch `<name>` — another local branch this one is based on, instead of the primary. Set automatically by `git new-branch -b <base>`; consumed by `git resync` (restacks the whole stack), `git stack` (shows it), and `git sweep` (re-points children when a parent is deleted). A branch with no `funcsBase` is implicitly based on the primary. Git automatically removes the whole `branch.<name>` section — including this key — when the branch is deleted, so no manual cleanup is needed in the common case. If the named parent branch is deleted by hand (bypassing `git sweep`), the link goes dangling; `git resync` repairs it (unsets it, with a warning) the next time it walks the stack, and `git stack` warns without modifying it. |
+| `branch.<name>.funcsBase` | string | What local branch `<name>` is maintained against. Read by `git resync` (what to rebase onto), `git stack` (what to show), and `git sweep` (what to re-point children to, and what not to delete). Set by `git new-branch -b <base>`, or by hand with `git config --local branch.<name>.funcsBase <value>`. |
+
+`funcsBase` has four possible answers, and every branch has one:
+
+| Value | Meaning |
+|-------|---------|
+| *unset* | **The remote primary.** The default, and what nearly every branch should be. `git resync` rebases the branch onto the freshly-fetched primary. |
+| a local branch name | **A stack parent.** The branch is a stacked diff on top of another feature branch. `git resync` restacks the whole stack: root onto the primary, each descendant onto its parent. |
+| any other ref | **A pinned base.** A tag, a remote-tracking ref (`origin/release/2.4`), or a sha. `git resync` rebases the branch onto that ref instead of the primary, and does not cascade above it. If the ref is remote-tracking on a remote other than the primary one, resync fetches that remote too. |
+| `none` | **No base.** The branch is never rebased onto anything. `git resync` reports it and exits 0, so it stays safe to run unconditionally. Use this for a branch that must not pick up trunk. |
+
+The literal string `none` (any case) is the no-base sentinel. A local branch
+actually named `none` must be recorded as `refs/heads/none`.
+
+### Pinned branches
+
+Pinning is a repository-configuration decision, not a per-push judgment call.
+Once a branch is pinned, the rest of the workflow follows automatically:
+
+- `git resync` prints a notice and leaves the branch alone. It is still
+  correct — and still expected — to run it before every push and PR.
+- The `git-workflow` plugin's pre-push hook stops requiring a recent fetch on
+  that branch, because there is nothing to be fresh against.
+- `git sweep` never deletes it, even when the primary contains it.
+- Branches stacked *on* a pinned branch still restack onto it normally, and
+  inherit its base if it is later swept or skipped over.
+
+```sh
+# never pull trunk into this branch again
+git config --local branch.release/2.4.funcsBase none
+
+# or track a frozen release line instead of trunk
+git config --local branch.hotfix/2.4.1.funcsBase origin/release/2.4
+
+# or create one already pinned
+git new-branch -b none vendor/patched-deps
+```
+
+### Dangling bases
+
+If a `funcsBase` value stops resolving, how it was written decides what
+happens. A bare name (`feature/parent`) is treated as a stack parent that was
+deleted by hand: `git resync` unsets the stale link with a warning and the
+branch falls back to the primary. A qualified value (`refs/...` or
+`<remote>/...`) was a deliberate pin, so it is reported but never rewritten,
+and the branch is left unrebased — silently reverting a pinned branch to
+following trunk is the one thing the pin exists to prevent. `git stack` warns
+about both and modifies neither.
+
+Git removes the whole `branch.<name>` section — including `funcsBase` — when
+the branch is deleted, so no manual cleanup is needed in the common case.
 
 ## Per-Command Verbose
 
