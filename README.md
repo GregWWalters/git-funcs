@@ -258,48 +258,27 @@ rebase conflict partway through the cascade, the conflicting branch is left
 mid-rebase (resolve or abort as usual); re-running `git resync` afterwards
 finishes the rest of the stack.
 
-### pin
-
-`git pin [-q|-v] [-u] [<base>]`
-
-Record what the current branch is maintained against — the base `git resync`
-rebases it onto, and the one `git stack` and `git sweep` consult.
-
-With no argument, pins the branch with **no base at all**: `resync` reports it
-and never rebases it, and `sweep` never deletes it. This is the command for a
-branch that must not pick up the primary.
-
-With `<base>`, pins to that ref instead — a tag, a remote-tracking ref such as
-`origin/release/2.4`, or a sha; `resync` rebases onto it, fetching its remote
-first. A local branch is recorded as a stack parent, the same relationship
-`git new-branch -b` creates.
-
-With `-u`, unpins: the base is removed and the branch follows the primary
-again.
-
-```sh
-git pin                        # never rebase this branch
-git pin origin/release/2.4     # track a release line, not trunk
-git pin feature/api            # stack it on another branch
-git pin -u                     # back to following trunk
-```
-
-Refuses to pin the primary branch, a detached HEAD, a branch to itself, a base
-that doesn't resolve, or a stack parent that would close a cycle.
-
-* `-u` (unpin) Remove the recorded base.
-* `-q` (quiet) Suppress writing to stdout.
-* `-v` (verbose) Also print the resulting config value.
-* `-h` (help) Print this help.
-
 ### stack
 
-`git stack [-q|-v]`
+`git stack [-q|-v] [-n|-u] [<base>]`
 
-Read-only. Print the tree of branches the current branch is stacked with, as
-recorded by `branch.<name>.funcsBase`. The first line is what the stack is
-maintained against — the primary, a pinned ref, or `(no base)`. The tree
-follows, root first, one branch per line, indented two spaces per depth.
+**The command for stacked diffs.** One command, two halves: with no argument it
+*reads* the stack, with an argument it *writes* it. Both work on
+`branch.<name>.funcsBase` — what a branch is maintained against, the base
+`git resync` rebases onto and the one `git sweep` consults.
+
+```sh
+git stack                      # show the tree and what it's based on
+git stack feature/api          # stack the current branch on feature/api
+git stack origin/release/2.4   # pin it to a release line, not trunk
+git stack -n                   # no base: never rebase this branch
+git stack -u                   # unstack: follow trunk again
+```
+
+**Showing (no argument).** Read-only. Print the tree of branches the current
+branch is stacked with. The first line is what the stack is maintained
+against — the primary, a pinned ref, or `(no base)`. The tree follows, root
+first, one branch per line, indented two spaces per depth.
 
 If the current branch isn't part of a stack, prints
 `<branch> (not stacked; base: <remote>/<primary>)` instead — or
@@ -310,10 +289,29 @@ Markers: ` *` the current branch; ` [merged]` the branch is fully contained
 in the stack's target (incl. squash/rebase merges); ` [base missing]` the
 branch's recorded base no longer resolves (a bare parent name is repaired
 automatically the next time `git resync` runs on this stack; a pinned ref is
-left alone — `git stack` itself never modifies anything).
+left alone — showing the stack never modifies anything).
 
-* `-q` (quiet) Print nothing to stdout.
-* `-v` (verbose) Print additional information.
+**Setting a base (`<base>`, `-n`, or `-u`).** With `<base>`, records it as the
+current branch's base. A **local branch** is recorded as a stack parent — the
+stacked-diff relationship, the same one `git new-branch -b` creates, so
+`git resync` restacks the whole stack. **Any other commit-ish** (a tag, a
+remote-tracking ref such as `origin/release/2.4`, or a sha) is recorded as a
+pinned base: `resync` rebases onto it, fetching its remote first, and never
+brings in the primary.
+
+With `-n`, records **no base at all**: `resync` reports the branch and never
+rebases it, and `sweep` never deletes it. This is the setting for a branch that
+must not pick up the primary. With `-u`, unstacks: the base is removed and the
+branch follows the primary again.
+
+Refuses to set a base on the primary branch or a detached HEAD, to set a branch
+as its own base, to use a base that doesn't resolve, or to create a stack
+parent that would close a cycle.
+
+* `-n` (none) Record no base; the branch is never rebased.
+* `-u` (unstack) Remove the recorded base.
+* `-q` (quiet) Suppress writing to stdout.
+* `-v` (verbose) Also print the resulting config value.
 * `-h` (help) Print this help.
 
 ### up
@@ -519,7 +517,7 @@ For a hotfix or backport that must sit on a frozen line, not trunk.
 git new-branch -b origin/release/2.4 hotfix/2.4.1
 
 # or for a branch that already exists
-git pin origin/release/2.4
+git stack origin/release/2.4
 ```
 
 `git resync` now rebases onto `origin/release/2.4` instead of trunk, and
@@ -544,8 +542,8 @@ For a branch that must not pick up trunk at all — a long-lived release
 branch, a vendored fork, anything deliberately frozen.
 
 ```sh
-# pin the branch you're on
-git pin
+# record "no base" on the branch you're on
+git stack -n
 
 # or create one already pinned (it still starts from fresh trunk)
 git new-branch -b none vendor/patched-deps
@@ -576,8 +574,8 @@ named `none` must be written `refs/heads/none`.
 
 ```sh
 git stack              # what is this branch based on?
-git pin -u             # unpin: back to following trunk
-git pin <new-base>     # re-point it
+git stack -u           # unstack: back to following trunk
+git stack <new-base>   # re-point it
 
 git config --get branch.<name>.funcsBase   # the raw value, for any branch
 ```

@@ -5,16 +5,25 @@ set -e # errexit
 
 helpTxt() {
 	heading 'NAME'
-	body 'git-stack - Show the current branch'\''s stack of dependent branches'
+	body 'git-stack - Show, or set, what the current branch is stacked on'
 
 	heading 'SYNOPSIS'
 	body 'git stack [-q|-v] [-h]'
+	body 'git stack [-q|-v] <base>'
+	body 'git stack [-q|-v] -n'
+	body 'git stack [-q|-v] -u'
 
 	heading 'DESCRIPTION'
-	body 'Print the tree of branches the current branch is stacked with, as
-	recorded by branch.<name>.funcsBase (set by "git new-branch -b"). Root
-	first, one branch per line, indented two spaces per depth beneath the
-	base line.'
+	body 'The one command for stacked diffs: read the stack with no argument,
+	write it with one. Both halves work on branch.<name>.funcsBase, the
+	record of what a branch is maintained against - the base "git resync"
+	rebases onto, and the one "git sweep" consults.'
+
+	heading 'SHOWING THE STACK'
+	body 'With no argument, print the tree of branches the current branch is
+	stacked with, as recorded by branch.<name>.funcsBase (set by this
+	command or by "git new-branch -b"). Root first, one branch per line,
+	indented two spaces per depth beneath the base line.'
 	body 'The first line is what the stack is maintained against: the remote
 	primary by default, or the pinned ref recorded in the root'\''s funcsBase,
 	or "(no base)" when the root is pinned with funcsBase = none and is never
@@ -27,14 +36,43 @@ helpTxt() {
 	" [base missing]" the branch'\''s recorded base no longer resolves (a bare
 	parent name is repaired automatically the next time "git resync" runs on
 	this stack; a pinned ref is left for you to fix).'
-	body 'This command never modifies anything, including a dangling
-	funcsBase link (unlike "git resync", which repairs it).'
+	body 'Showing never modifies anything, including a dangling funcsBase link
+	(unlike "git resync", which repairs it).'
+
+	heading 'SETTING THE BASE'
+	body 'With <base>, record it as the current branch'\''s base. A local branch
+	is recorded as a stack parent - the stacked-diff relationship, the same
+	one "git new-branch -b" creates, so "git resync" restacks the whole
+	stack. Any other commit-ish (a tag, a remote-tracking ref such as
+	origin/release/2.4, or a sha) is recorded as a pinned base: "git resync"
+	rebases onto it, fetching its remote first, and never brings in the
+	primary.'
+	body 'With -n, records no base at all. "git resync" then reports the branch
+	and never rebases it, and "git sweep" never deletes it. Use this for a
+	branch that must not pick up the primary - a long-lived release branch,
+	a vendored fork, anything deliberately frozen.'
+	body 'With -u, unstacks: the recorded base is removed and the branch
+	follows the primary again.'
+	body 'The base is recorded once, in this repository'\''s local config, so it
+	holds for every later "git resync" without anyone having to remember it.
+	That is the point: "git resync" stays safe to run on every branch, so
+	whether to run it never becomes a per-push judgment call.'
 
 	heading 'OPTIONS'
+	option '-n' '(none) Record no base; "git resync" never rebases the branch.'
+	option '-u' '(unstack) Remove the recorded base; the branch follows the
+		primary again.'
 	option '-q' '(quiet) Suppress writing to stdout. Overrides .gitconfig
 		options funcs.verbose and funcs.stack.verbose.'
 	option '-v' '(verbose) Print additional information'
 	option '-h' '(help) Print this help'
+
+	heading 'EXAMPLES'
+	body 'git stack                     # show the tree and what it is based on
+	git stack feature/api         # stack the current branch on feature/api
+	git stack origin/release/2.4  # pin it to a release line, not trunk
+	git stack -n                  # no base: never rebase this branch
+	git stack -u                  # unstack: follow the primary again'
 }
 
 case "$1" in
@@ -44,11 +82,13 @@ case "$1" in
 		;;
 esac
 
-q=0 v=0
-while getopts ":hqv" opt; do
+q=0 v=0 unstack=0 setNone=0
+while getopts ":hnquv" opt; do
 	case $opt in
 		h) helpTxt; exit 0 ;;
+		n) setNone=1 ;;
 		q) q=1; v=0 ;;
+		u) unstack=1 ;;
 		v) v=1 ;;
 		\?)
 			echo >&2 "Unknown option -$OPTARG. Run git stack -h for help."
@@ -62,13 +102,135 @@ if [ $q -eq 1 ]; then v=0
 elif [ $v -eq 1 ] || configValueOn -o -q "verbose" "stack"; then v=1
 fi
 
+baseArg=$1
+
+if [ $unstack -eq 1 ] && [ $setNone -eq 1 ]; then
+	echo >&2 "git-stack: -u and -n are mutually exclusive."
+	exit 1
+fi
+if [ -n "$baseArg" ] && { [ $unstack -eq 1 ] || [ $setNone -eq 1 ]; }; then
+	echo >&2 "git-stack: -u and -n take no <base> argument."
+	exit 1
+fi
+
 current=$(git branch --show-current 2>/dev/null || :)
 if [ -z "$current" ]; then
 	echo >&2 "git-stack: not on a branch (detached HEAD)."
 	exit 1
 fi
 
+# Reading and writing are one command, so which mode we are in is decided by
+# the arguments alone: any of -u, -n or a <base> writes, nothing reads.
+if [ $unstack -eq 0 ] && [ $setNone -eq 0 ] && [ -z "$baseArg" ]; then
+	writing=0
+else
+	writing=1
+fi
+
 primary=$(git primary)
+
+# ==== set the base =======================================================
+
+if [ $writing -eq 1 ]; then
+
+	primaryBranch=$(getPrimaryBranch -o)
+	if [ -n "$primaryBranch" ] && [ "$current" = "$primaryBranch" ]; then
+		echo >&2 "git-stack: '$current' is this repository's primary branch; it has" \
+			"no base to record. Stack a working branch instead."
+		exit 1
+	fi
+
+	report() {
+		[ $q -eq 0 ] || return 0
+		echo "$1"
+		if [ $v -eq 1 ]; then
+			echo "  branch.$current.funcsBase = $(getBranchBase "$current" || echo '<unset>')"
+		fi
+		return 0
+	}
+
+	# --- unstack -------------------------------------------------------------
+
+	if [ $unstack -eq 1 ]; then
+		old=$(getBranchBase "$current")
+		if [ -z "$old" ]; then
+			report "$current has no recorded base; nothing to do."
+			exit 0
+		fi
+		git config --local --unset "branch.$current.funcsBase"
+		report "unstacked $current (was '$old'); it follows $primary again."
+		exit 0
+	fi
+
+	# --- no base -------------------------------------------------------------
+
+	recordNone() {
+		git config --local "branch.$current.funcsBase" none
+		report "recorded $current with no base; 'git resync' will not rebase it."
+		exit 0
+	}
+
+	[ $setNone -eq 1 ] && recordNone
+	case "$(printf '%s' "$baseArg" | tr '[:upper:]' '[:lower:]')" in
+		none) recordNone ;;
+	esac
+
+	# --- stack on a base -----------------------------------------------------
+
+	case "$baseArg" in
+		"."|"@") base=$current ;;
+		*)       base=$baseArg ;;
+	esac
+
+	if [ "$base" = "$current" ] || [ "$base" = "refs/heads/$current" ]; then
+		echo >&2 "git-stack: a branch cannot be its own base."
+		exit 1
+	fi
+
+	if ! git rev-parse --verify --quiet "refs/heads/$base" >/dev/null 2>&1 \
+		&& ! git rev-parse --verify --quiet "$base^{commit}" >/dev/null 2>&1; then
+		echo >&2 "git-stack: base '$base' does not resolve to a branch or ref."
+		exit 1
+	fi
+
+	# A base that is a local branch is a stack parent, so it must not lead back
+	# here: git-resync refuses to guess on a cycle, and it is cheaper to catch
+	# that now than to leave the stack unresyncable.
+	if git rev-parse --verify --quiet "refs/heads/$base" >/dev/null 2>&1; then
+		walk=$base
+		seen=" $base "
+		while :; do
+			next=$(getBranchBase "$walk")
+			[ -n "$next" ] || break
+			if [ "$next" = "$current" ] || [ "$next" = "refs/heads/$current" ]; then
+				echo >&2 "git-stack: '$base' is already stacked on '$current', directly" \
+					"or through its parents; stacking it here would make a cycle."
+				exit 1
+			fi
+			case "$seen" in
+				*" $next "*) break ;;
+			esac
+			seen="$seen$next "
+			git rev-parse --verify --quiet "refs/heads/$next" >/dev/null 2>&1 || break
+			walk=$next
+		done
+	fi
+
+	git config --local "branch.$current.funcsBase" "$base"
+
+	kv=$(resolveBase "$current")
+	case "${kv%% *}" in
+		branch)
+			report "stacked $current on $base; 'git resync' restacks the whole stack."
+			;;
+		*)
+			report "pinned $current to $base; 'git resync' rebases onto it, not the primary."
+			;;
+	esac
+	exit 0
+fi
+
+# ==== show the stack =====================================================
 
 myKv=$(resolveBase "$current")
 myKind=${myKv%% *}

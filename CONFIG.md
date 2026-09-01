@@ -16,7 +16,7 @@ section. Use `git config --local` to set them.
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `branch.<name>.funcsBase` | string | What local branch `<name>` is maintained against. Read by `git resync` (what to rebase onto), `git stack` (what to show), and `git sweep` (what to re-point children to, and what not to delete). Set by `git pin` on the current branch, by `git new-branch -b <base>` at creation, or by hand with `git config --local branch.<name>.funcsBase <value>`. |
+| `branch.<name>.funcsBase` | string | What local branch `<name>` is maintained against. Read by `git resync` (what to rebase onto), `git stack` (what to show), and `git sweep` (what to re-point children to, and what not to delete). Set by `git stack <base>` on the current branch, by `git new-branch -b <base>` at creation, or by hand with `git config --local branch.<name>.funcsBase <value>`. |
 
 `funcsBase` has four possible answers, and every branch has one:
 
@@ -45,19 +45,19 @@ Once a branch is pinned, the rest of the workflow follows automatically:
 
 ```sh
 # never pull trunk into this branch again
-git pin
+git stack -n
 
 # or track a frozen release line instead of trunk
-git pin origin/release/2.4
+git stack origin/release/2.4
 
 # or create one already pinned
 git new-branch -b none vendor/patched-deps
 
 # undo
-git pin -u
+git stack -u
 ```
 
-`git pin` is the front end for this key; the equivalent raw form is
+`git stack` is the front end for this key; the equivalent raw form is
 `git config --local branch.<name>.funcsBase <value>`.
 
 ### Dangling bases
@@ -68,8 +68,8 @@ deleted by hand: `git resync` unsets the stale link with a warning and the
 branch falls back to the primary. A qualified value (`refs/...` or
 `<remote>/...`) was a deliberate pin, so it is reported but never rewritten,
 and the branch is left unrebased — silently reverting a pinned branch to
-following trunk is the one thing the pin exists to prevent. `git stack` warns
-about both and modifies neither.
+following trunk is the one thing the pin exists to prevent. `git stack` (with no argument)
+warns about both and modifies neither.
 
 Git removes the whole `branch.<name>` section — including `funcsBase` — when
 the branch is deleted, so no manual cleanup is needed in the common case.
@@ -89,7 +89,6 @@ Each command checks its own verbose key before falling back to
 | `funcs.contains.verbose` | git-contains |
 | `funcs.new-tree.verbose` | git-new-tree |
 | `funcs.stack.verbose` | git-stack |
-| `funcs.pin.verbose` | git-pin |
 | `funcs.sweep.verbose` | git-sweep |
 
 ## Sweep Options (`git sweep`)
