@@ -9,7 +9,7 @@ helpTxt() {
 	body "git-resync - Rebase the local HEAD on the remote's latest HEAD"
 
 	heading 'SYNOPSIS'
-	body "git resync [-v|-q] [<remote>]"
+	body "git resync [-v|-q] [-p] [-u] [<remote>]"
 
 	heading 'DESCRIPTION'
 	body "Fetch the latest HEAD from this repository's remote and rebase the local
@@ -34,8 +34,25 @@ helpTxt() {
 	squash/rebase merge) is skipped over rather than replayed, and the child's
 	funcsBase is re-pointed past it, inheriting the parent's own base. Use
 	'git stack' to inspect the stack."
+	body "With -p, every branch resync moved is pushed afterwards, parents
+	first, with --force-with-lease - which since git 2.30 also requires that
+	the remote tip be reachable from the branch's reflog, so a branch someone
+	else has pushed to cannot be overwritten by a restack that dropped their
+	commits. resync additionally records each upstream before it fetches, so
+	a branch whose remote moved is reported by name, with the range to
+	review, and skipped; resync then exits non-zero so the skip is not
+	missed."
+	body "-p only updates branches that already have an upstream. A branch
+	that has never been pushed is named and left alone, because publishing
+	local work for the first time is a deliberate act and -p is the flag you
+	will run habitually. Add -u to publish those too (a plain 'push -u', not
+	a force). -u implies -p. The primary branch is never force-pushed."
 
 	heading 'OPTIONS'
+	option '-p' '(push) After restacking, push each moved branch with
+		--force-with-lease, parents first. Skips branches with no upstream.'
+	option '-u' '(upstream) Also publish stack branches that have no
+		upstream yet, with a plain "push -u". Implies -p.'
 	option '-q' '(quiet) Suppress writing to stdout. Overrides .gitconfig
 		options funcs.verbose and funcs.resync.verbose.'
 	option '-v' '(verbose) Print additional information'
@@ -51,11 +68,13 @@ case "$1" in
 		;;
 esac
 
-q=0 v=0
-while getopts ":hqv" opt; do
+q=0 v=0 push=0 pushNew=0
+while getopts ":hpquv" opt; do
 	case $opt in
 		h) helpTxt; exit 0 ;;
+		p) push=1 ;;
 		q) q=1; v=0 ;;
+		u) pushNew=1; push=1 ;;
 		v) v=1 ;;
 		\?)
 			echo >&2 "Unknown option -$OPTARG". \
@@ -99,13 +118,133 @@ myChildren=""
 # redirect output of the next block
 [ $v -eq 1 ] && exec 4>&1 || exec 4>/dev/null
 
+# --- Publishing the result (-p / -u) ---
+
+# Writes "<branch>\t<remote>\t<remote-ref>\t<tracking-ref>\t<sha>" for each
+# branch named on stdin, or "<branch>\t-\t-\t-\t-" for one with no upstream.
+#
+# Captured before the fetch, which is what lets pushStack say "someone else
+# moved this branch" precisely, and name the range to review, instead of
+# leaving the user with a bare rejection from git.
+#
+# It is not the only guard. The push itself uses bare --force-with-lease,
+# which since git 2.30 implies --force-if-includes: git refuses unless the
+# remote tip is reachable from the local branch's reflog, i.e. unless we
+# actually integrated it. That is the backstop, and it is the stronger of the
+# two because git enforces it. Note the explicit --force-with-lease=<ref>:<sha>
+# form would DISABLE force-if-includes, which is why it is not used here.
+captureUpstreams() {
+	while read -r cuName; do
+		cuRemote=$(git config --get "branch.$cuName.remote" 2>/dev/null || :)
+		cuMerge=$(git config --get "branch.$cuName.merge" 2>/dev/null || :)
+		cuTrack=$(git rev-parse --symbolic-full-name "$cuName@{upstream}" 2>/dev/null || :)
+		if [ -z "$cuRemote" ] || [ -z "$cuMerge" ] || [ -z "$cuTrack" ]; then
+			printf '%s\t-\t-\t-\t-\n' "$cuName"
+			continue
+		fi
+		cuSha=$(git rev-parse --verify --quiet "$cuTrack" 2>/dev/null || :)
+		printf '%s\t%s\t%s\t%s\t%s\n' "$cuName" "$cuRemote" "$cuMerge" \
+			"$cuTrack" "${cuSha:--}"
+	done
+}
+
+# Pushes the branches recorded in file $1, in file order (parents first).
+# Returns 1 if any branch was skipped, so the caller can exit non-zero.
+pushStack() {
+	psFailed=0
+	while IFS="$(printf '\t')" read -r psName psRemote psMerge psTrack psPre; do
+		psHead=$(git rev-parse --verify --quiet "refs/heads/$psName" 2>/dev/null || :)
+		[ -n "$psHead" ] || continue
+
+		# The primary is advanced by PR-driven pulls, never by a force-push
+		# from here - the same rule git-co-primary exists to enforce.
+		if [ "$psName" = "$branch" ]; then
+			echo >&2 "notice: not pushing '$psName' (this repository's primary branch)."
+			continue
+		fi
+
+		if [ "$psRemote" = "-" ]; then
+			if [ $pushNew -eq 0 ]; then
+				echo >&2 "notice: '$psName' has no upstream; not pushed." \
+					"Use -u to publish it."
+				continue
+			fi
+			if git push -u "$remote" "refs/heads/$psName:refs/heads/$psName" \
+				</dev/null >&4 2>&4; then
+				if [ $q -eq 0 ]; then echo "published $psName -> $remote/$psName"; fi
+			else
+				echo >&2 "git-resync: failed to publish '$psName'."
+				psFailed=1
+			fi
+			continue
+		fi
+
+		psNow=$(git rev-parse --verify --quiet "$psTrack" 2>/dev/null || :)
+		if [ "$psNow" = "$psHead" ]; then
+			if [ $v -eq 1 ]; then echo "$psName is already up to date on $psRemote"; fi
+			continue
+		fi
+
+		# The remote moved since we last looked. That is fine when we already
+		# contain the new commits (e.g. we pushed from another machine);
+		# otherwise someone else's work is at stake and we stop here, with a
+		# better message than the rejection git would give us.
+		if [ "$psNow" != "$psPre" ]; then
+			if [ -n "$psNow" ] && git merge-base --is-ancestor "$psNow" \
+				"refs/heads/$psName" 2>/dev/null; then
+				:
+			else
+				echo >&2 "warning: '$psName' moved on $psRemote since your last fetch" \
+					"and those commits are not in your local branch; not pushing it." \
+					"Review with 'git log $psName..$psTrack', integrate, then re-run."
+				psFailed=1
+				continue
+			fi
+		fi
+
+		if [ "$psNow" = "" ]; then
+			# An upstream is configured but the remote branch does not exist:
+			# a create, not a force, so there is no lease to take.
+			psCmd='git push -u "$psRemote" "refs/heads/$psName:$psMerge"'
+			psWhat="published"
+		else
+			psCmd='git push --force-with-lease "$psRemote" "refs/heads/$psName:$psMerge"'
+			psWhat="pushed"
+		fi
+		if eval "$psCmd" </dev/null >&4 2>&4; then
+			if [ $q -eq 0 ]; then
+				echo "$psWhat $psName -> $psRemote/${psMerge#refs/heads/}"
+			fi
+		else
+			echo >&2 "git-resync: failed to push '$psName' to $psRemote." \
+				"The remote may have moved again; re-run 'git resync -p'."
+			psFailed=1
+		fi
+	done < "$1"
+	return $psFailed
+}
+
+presfile=""
+if [ $push -eq 1 ]; then
+	presfile=$(mktemp)
+	trap 'rm -f "$presfile"' EXIT
+fi
+
+rc=0
+
 if [ -z "$current" ] || { [ -z "$myBase" ] && [ -z "$myChildren" ]; }; then
-	# Not part of a stack: exactly the historical behavior.
+	# Not part of a stack: exactly the historical behavior, plus the push.
+	if [ $push -eq 1 ] && [ -n "$current" ]; then
+		echo "$current" | captureUpstreams > "$presfile"
+	fi
 	{
 		git fetch "$remote"
 		git rebase --autostash -X patience "$remote/$branch"
 	} >&4
-	exit 0
+	if [ $push -eq 1 ] && [ -n "$current" ]; then
+		pushStack "$presfile" || rc=1
+	fi
+	exit $rc
 fi
 
 # --- Stack-aware restack cascade ---
@@ -240,7 +379,7 @@ esac
 stackfile=$(mktemp)
 oldshafile=$(mktemp)
 datafile=$(mktemp)
-trap 'rm -f "$stackfile" "$oldshafile" "$datafile"' EXIT
+trap 'rm -f "$stackfile" "$oldshafile" "$datafile" "$presfile"' EXIT
 
 buildStack "$root" > "$stackfile"
 
@@ -251,6 +390,11 @@ if [ -z "$targetRef" ] && [ "$(awk 'END{print NR}' "$stackfile")" -eq 1 ]; then
 		echo >&2 "notice: '$root' has no base (funcsBase = none); not rebasing."
 	fi
 	exit 0
+fi
+
+# Before the fetch, for the reason spelled out on captureUpstreams.
+if [ $push -eq 1 ]; then
+	cut -d' ' -f1 "$stackfile" | captureUpstreams > "$presfile"
 fi
 
 {
@@ -328,3 +472,9 @@ done < "$stackfile"
 
 	git checkout "$current"
 } >&4
+
+if [ $push -eq 1 ]; then
+	pushStack "$presfile" || rc=1
+fi
+
+exit $rc

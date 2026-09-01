@@ -222,7 +222,7 @@ can be captured by a shell wrapper to `cd` into.
 
 ### resync
 
-`git resync [-v|-q] [<remote>]`
+`git resync [-v|-q] [-p] [-u] [<remote>]`
 
 Fetch the latest HEAD from this repository's remote and rebase the local HEAD
 on it. If <remote> is provided, it will show the primary branch for that
@@ -231,6 +231,10 @@ repository's configuration for the primary remote, and if not found, return
 the first remote associated with the repository. To change the primary
 remote, use `git-refresh -s <remote>`."
 
+* `-p` (push) After restacking, push each moved branch with
+	`--force-with-lease`, parents first. Skips branches with no upstream.
+* `-u` (upstream) Also publish stack branches that have no upstream yet,
+	with a plain `push -u`. Implies `-p`.
 * `-q` (quiet) Print nothing to stdout. Overrides .gitconfig options
 	funcs.verbose and funcs.refresh.verbose.
 * `-v` (verbose) Print output from git commands
@@ -257,6 +261,44 @@ it, inheriting the parent's own base (so a pinned stack stays pinned). On a
 rebase conflict partway through the cascade, the conflicting branch is left
 mid-rebase (resolve or abort as usual); re-running `git resync` afterwards
 finishes the rest of the stack.
+
+#### Publishing the restack (`-p`, `-u`)
+
+A restack rewrites every branch in the stack, so all of them diverge from
+their remotes. `-p` pushes them back up afterwards, parents first:
+
+```sh
+git resync -p     # restack, then force-push each branch that moved
+git resync -u     # ...and publish stack branches not yet on the remote
+```
+
+`-p` only touches branches that **already have an upstream**. One that has
+never been pushed is named and left alone — publishing local work for the
+first time is a deliberate act, and `-p` is the flag you end up running
+habitually. `-u` opts into that too (a plain `push -u`, not a force) and
+implies `-p`. The primary branch is never force-pushed.
+
+Two independent guards stop a restack from discarding someone else's work:
+
+1. The push uses bare `--force-with-lease`, which since git 2.30 also
+   requires the remote tip to be reachable from the branch's reflog. A
+   branch a collaborator has pushed to cannot be overwritten by a restack
+   that dropped their commits — git itself refuses. (The explicit
+   `--force-with-lease=<ref>:<sha>` form *disables* that check, which is
+   why it isn't used.)
+2. `resync` records each upstream before it fetches, so it can name the
+   contested branch and the range to review rather than leaving you with a
+   bare rejection.
+
+A skipped branch doesn't stop the rest of the stack; the others are pushed
+and `resync` exits non-zero so the skip isn't missed.
+
+```
+pushed f/1 -> origin/f/1
+warning: 'f/2' moved on origin since your last fetch and those commits are
+not in your local branch; not pushing it. Review with
+'git log f/2..refs/remotes/origin/f/2', integrate, then re-run.
+```
 
 ### stack
 
@@ -482,11 +524,15 @@ From then on:
 ```sh
 git stack      # show the tree and what it's based on (read-only)
 git resync     # restacks the WHOLE stack, from any branch in it
+git resync -p  # ...and force-push every branch it moved, parents first
 ```
 
 `resync` rebases the root onto fresh trunk, then each descendant onto its
 (now moved) parent, in order. Run it from anywhere in the stack; it is still
-the single command before every push and PR.
+the single command before every push and PR. A restack rewrites every branch
+in the stack, so they all need force-pushing afterwards — `-p` does that
+(`-u` also publishes branches not yet on the remote). See "Publishing the
+restack".
 
 Open the child's PR against its parent, not trunk:
 
