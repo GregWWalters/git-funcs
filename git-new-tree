@@ -8,7 +8,7 @@ helpTxt() {
 	body 'git-new-tree - Create a worktree, attaching or creating its branch'
 
 	heading 'SYNOPSIS'
-	body 'git new-tree [-q|-v] [-P] [-d <base-dir>] [-p <path>] <branch>'
+	body 'git new-tree [-q|-v] [-P] [-d <base-dir>] [-p <path>] [<branch>]'
 
 	heading 'DESCRIPTION'
 	body "Create a worktree for <branch>. If <branch> already exists locally,
@@ -16,9 +16,13 @@ attach the worktree to it. Otherwise, create <branch> from the refreshed
 primary remote's HEAD (as 'git new-branch' does). To base on a non-primary
 remote, first set it with 'git refresh -s <remote>'."
 
-	body "By default, the worktree is placed at <base>/<branch>, where <base>
-is the first of: the path given to -p (used verbatim; -d ignored), the
--d <base-dir> argument, the local git config value funcs.worktree.dir, or
+	body "Either <branch> or -p <path> (or both) may be given. When only
+<branch> is given, the worktree is placed at <base>/<branch>. When only
+-p <path> is given, the branch name is derived by stripping the resolved
+<base> prefix from <path>. When both are given, each is used as-is."
+
+	body "The <base> directory is the first of: the -d <base-dir> argument,
+the local git config value funcs.worktree.dir, or
 '<repo-parent>/wtree/<repo-name>'. Relative bases are anchored at the main
 worktree root. Missing parent directories are created and rolled back on
 failure."
@@ -50,8 +54,8 @@ stdout, so it can be captured in a shell wrapper to cd into."
 	heading 'OPTIONS'
 	option '-d <base-dir>' '(dir) Override the worktree base directory for this
 run. Ignored when -p is set.'
-	option '-p <path>' '(path) Use <path> verbatim as the worktree path; skip
-base-dir composition.'
+	option '-p <path>' '(path) Use <path> verbatim as the worktree path. If
+<branch> is omitted, derive it by stripping the resolved base prefix.'
 	option '-P' '(no-populate) Skip populating configured funcs.worktree.copyPath
 and funcs.worktree.linkPath entries into the new worktree.'
 	option '-q' '(quiet) Suppress writing to stdout. Overrides .gitconfig
@@ -98,30 +102,54 @@ elif [ $v -eq 1 ] || configValueOn -o -q "verbose" "new-tree"; then
 fi
 
 branch=$1
-if [ -z "$branch" ]; then
-	echo >&2 "git new-tree requires 1 argument <branch name>"
-	exit 1
-fi
 
 # Resolve worktree path. Always derive from the main worktree so behavior is
 # identical whether invoked from the main checkout or a linked worktree.
 toplevel=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
-if [ -n "$pathArg" ]; then
-	wtPath=$pathArg
+
+# Resolve base directory (needed for both path derivation and branch derivation).
+if [ -n "$dirArg" ]; then
+	base=$dirArg
 else
-	if [ -n "$dirArg" ]; then
-		base=$dirArg
-	else
-		base=$(git config --local --get funcs.worktree.dir || :)
-		if [ -z "$base" ]; then
-			base="$(dirname "$toplevel")/wtree/$(basename "$toplevel")"
-		fi
+	base=$(git config --local --get funcs.worktree.dir || :)
+	if [ -z "$base" ]; then
+		base="$(dirname "$toplevel")/wtree/$(basename "$toplevel")"
 	fi
-	case "$base" in
-		/*) ;;
-		*) base="$toplevel/$base" ;;
+fi
+case "$base" in
+	/*) ;;
+	*) base="$toplevel/$base" ;;
+esac
+
+if [ -n "$pathArg" ] && [ -n "$branch" ]; then
+	# Both given explicitly.
+	wtPath=$pathArg
+elif [ -n "$pathArg" ]; then
+	# Path given, branch omitted: derive branch by stripping the base prefix.
+	wtPath=$pathArg
+	case "$pathArg" in
+		/*) absPath=$pathArg ;;
+		*) absPath="$toplevel/$pathArg" ;;
 	esac
+	# Normalize both through a common representation (resolve ../ etc.).
+	absPath=$(cd "$toplevel" && realpath -m "$absPath" 2>/dev/null || echo "$absPath")
+	absBase=$(realpath -m "$base" 2>/dev/null || echo "$base")
+	case "$absPath" in
+		"$absBase"/*)
+			branch=${absPath#"$absBase"/}
+			;;
+		*)
+			echo >&2 "git new-tree: cannot derive branch from path '$pathArg'" \
+				"(does not start with base '$base')"
+			exit 1
+			;;
+	esac
+elif [ -n "$branch" ]; then
+	# Branch given, path omitted: compose from base.
 	wtPath="$base/$branch"
+else
+	echo >&2 "git new-tree requires <branch> or -p <path>"
+	exit 1
 fi
 
 # redirect informational output of the next block
