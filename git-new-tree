@@ -8,7 +8,7 @@ helpTxt() {
 	body 'git-new-tree - Create a worktree, attaching or creating its branch'
 
 	heading 'SYNOPSIS'
-	body 'git new-tree [-q|-v] [-P] [-d <base-dir>] [-p <path>] [<branch>]'
+	body 'git new-tree [-q|-v] [-P] [-R] [-S <tags>] [-d <base-dir>] [-p <path>] [<branch>]'
 
 	heading 'DESCRIPTION'
 	body "Create a worktree for <branch>. If <branch> already exists locally,
@@ -48,6 +48,15 @@ prints to stderr and skips; 'silent' skips quietly; 'block' prints to
 stderr, tears down the new worktree, and exits non-zero. See CONFIG.md
 for the .worktree-populate file format."
 
+	body "Setup commands can be declared with 'run <cmd>' lines in
+.worktree-populate or the multi-value config key funcs.worktree.runCmd.
+Commands run (via 'sh -c') in the new worktree after copy/link
+population. A tagged entry 'run:<tag> <cmd>' runs only when -S includes
+that tag; untagged entries always run. -R skips all run steps. Failure
+handling follows funcs.worktree.onRunFail (config) or '!onRunFail'
+(manifest directive); values are 'warn' (default, log and continue) or
+'block' (tear down and exit non-zero)."
+
 	body "On success, the absolute path of the new worktree is printed to
 stdout, so it can be captured in a shell wrapper to cd into."
 
@@ -58,6 +67,10 @@ run. Ignored when -p is set.'
 <branch> is omitted, derive it by stripping the resolved base prefix.'
 	option '-P' '(no-populate) Skip populating configured funcs.worktree.copyPath
 and funcs.worktree.linkPath entries into the new worktree.'
+	option '-R' '(no-run) Skip all run steps (both tagged and untagged).'
+	option '-S <tags>' '(setup) Comma-separated tags of additional run steps to
+execute (e.g. -S full or -S full,python). Untagged run entries always
+execute; tagged entries run only when their tag is included here.'
 	option '-q' '(quiet) Suppress writing to stdout. Overrides .gitconfig
 options funcs.verbose and funcs.new-tree.verbose.'
 	option '-v' '(verbose) Print additional information'
@@ -73,13 +86,15 @@ case "$1" in
 		;;
 esac
 
-q=0 v=0 dirArg="" pathArg="" populate=1
-while getopts ":hqvPd:p:" opt; do
+q=0 v=0 dirArg="" pathArg="" populate=1 runSteps=1 setupTags=""
+while getopts ":hqvPRd:p:S:" opt; do
 	case $opt in
 		h) helpTxt; exit 0 ;;
 		q) q=1 v=0 ;;
 		v) v=1 ;;
 		P) populate=0 ;;
+		R) runSteps=0 ;;
+		S) setupTags=$OPTARG ;;
 		d) dirArg=$OPTARG ;;
 		p) pathArg=$OPTARG ;;
 		:)
@@ -329,7 +344,8 @@ if [ $populate -eq 1 ]; then
 				rel=${line#"$mode"}
 				rel=$(printf '%s' "$rel" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
 				case "$mode" in
-					!onMissing) ;; # already handled in pass 1
+					!onMissing|!onRunFail) ;; # directives handled elsewhere
+					run|run:*) ;; # handled in the run block
 					copy|link)
 						if [ -z "$rel" ]; then
 							echo >&2 "worktree populate: .worktree-populate:$lineno '$mode' with no path; skipping"
@@ -371,6 +387,124 @@ if [ $populate -eq 1 ]; then
 
 	if [ $blockFail -eq 1 ]; then
 		echo >&2 "worktree populate: tearing down $wtPath"
+		git worktree remove --force "$wtPath" 2>/dev/null || :
+		[ "$branchExisted" = "0" ] && git branch -D "$branch" 2>/dev/null || :
+		[ -n "$createdParent" ] && rmdir -p "$createdParent" 2>/dev/null || :
+		exit 1
+	fi
+fi
+
+# Run setup commands from .worktree-populate (run/run:<tag>) and
+# funcs.worktree.runCmd (always untagged). Executed in the new worktree
+# via sh -c. Untagged entries run unless -R; tagged entries run only when
+# -S includes the tag. Independent of -P (copy/link).
+if [ $runSteps -eq 1 ]; then
+	manifest=$toplevel/.worktree-populate
+
+	# Resolve !onRunFail directive from manifest (mirrors !onMissing scan).
+	manifestOnRunFail=""
+	if [ -f "$manifest" ]; then
+		while IFS= read -r line || [ -n "$line" ]; do
+			line=${line%%#*}
+			line=$(printf '%s' "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+			[ -z "$line" ] && continue
+			tok=${line%%[[:space:]]*}
+			[ "$tok" = "!onRunFail" ] || continue
+			val=${line#"$tok"}
+			val=$(printf '%s' "$val" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+			case "$val" in
+				warn|block)
+					if [ -n "$manifestOnRunFail" ] && [ "$manifestOnRunFail" != "$val" ]; then
+						echo >&2 "worktree run: .worktree-populate '!onRunFail' redefined from '$manifestOnRunFail' to '$val'"
+					fi
+					manifestOnRunFail=$val
+					;;
+				*)
+					echo >&2 "worktree run: '!onRunFail' value must be warn|block; got '$val'; ignoring"
+					;;
+			esac
+		done < "$manifest"
+	fi
+
+	cfgOnRunFail=$(git config --local --get funcs.worktree.onRunFail 2>/dev/null || echo warn)
+	case "$cfgOnRunFail" in
+		warn|block) ;;
+		*)
+			echo >&2 "worktree run: invalid funcs.worktree.onRunFail '$cfgOnRunFail'; using 'warn'"
+			cfgOnRunFail=warn
+			;;
+	esac
+	resolvedManifestORF=${manifestOnRunFail:-$cfgOnRunFail}
+
+	# execRun <tag> <onRunFail> <cmd...>
+	# Returns 0 (ok or skipped) or 2 (block-fail).
+	execRun() (
+		tag=$1 orf=$2
+		shift 2
+		cmd="$*"
+		if [ -n "$tag" ]; then
+			case ",$setupTags," in
+				*",$tag,"*) ;;
+				*) return 0 ;;
+			esac
+		fi
+		echo "worktree run${tag:+:$tag}: $cmd"
+		if (cd "$wtPath" && sh -c "$cmd") 2>&1; then
+			:
+		else
+			rc=$?
+			case $orf in
+				block)
+					echo >&2 "worktree run: command failed (exit $rc); onRunFail=block, aborting"
+					return 2
+					;;
+				*)
+					echo >&2 "worktree run: command failed (exit $rc); continuing"
+					;;
+			esac
+		fi
+	)
+
+	runBlockFail=0
+
+	# Manifest entries
+	if [ -f "$manifest" ]; then
+		while IFS= read -r line || [ -n "$line" ]; do
+			line=${line%%#*}
+			line=$(printf '%s' "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+			[ -z "$line" ] && continue
+			mode=${line%%[[:space:]]*}
+			rest=${line#"$mode"}
+			rest=$(printf '%s' "$rest" | sed -e 's/^[[:space:]]*//')
+			case "$mode" in
+				run)
+					[ -z "$rest" ] && continue
+					execRun "" "$resolvedManifestORF" "$rest" >&4 && rc=0 || rc=$?
+					[ $rc -eq 2 ] && { runBlockFail=1; break; }
+					;;
+				run:*)
+					tag=${mode#run:}
+					[ -z "$rest" ] && continue
+					execRun "$tag" "$resolvedManifestORF" "$rest" >&4 && rc=0 || rc=$?
+					[ $rc -eq 2 ] && { runBlockFail=1; break; }
+					;;
+			esac
+		done < "$manifest"
+	fi
+
+	# Config entries (always untagged)
+	if [ $runBlockFail -eq 0 ]; then
+		git config --local --get-all funcs.worktree.runCmd 2>/dev/null |
+			while IFS= read -r cmd; do
+				[ -z "$cmd" ] && continue
+				execRun "" "$cfgOnRunFail" "$cmd" >&4 && rc=0 || rc=$?
+				if [ $rc -eq 2 ]; then exit 2; fi
+			done && rc=0 || rc=$?
+		[ "${rc:-0}" -eq 2 ] && runBlockFail=1
+	fi
+
+	if [ $runBlockFail -eq 1 ]; then
+		echo >&2 "worktree run: tearing down $wtPath"
 		git worktree remove --force "$wtPath" 2>/dev/null || :
 		[ "$branchExisted" = "0" ] && git branch -D "$branch" 2>/dev/null || :
 		[ -n "$createdParent" ] && rmdir -p "$createdParent" 2>/dev/null || :

@@ -105,6 +105,8 @@ Each command checks its own verbose key before falling back to
 | `funcs.worktree.copyPath` | string (multi-value) | none | Paths (relative to the main worktree) copied recursively into each new worktree after creation. Set one entry per invocation with `git config --local --add funcs.worktree.copyPath <path>`. Files and directories both work. Missing sources are handled per `funcs.worktree.onMissing` (see below). Existing destinations are never overwritten. Absolute paths and paths containing `..` are rejected. Skip per-run with `git new-tree -P`. These entries are a per-clone overlay on top of `.worktree-populate` (see below). |
 | `funcs.worktree.linkPath` | string (multi-value) | none | Like `copyPath`, but creates an absolute symlink pointing back at the source in the main worktree instead of copying. Use for shared caches or large read-mostly artefacts where a single source of truth is wanted. Avoid for files you edit per-worktree (`.env` and friends — use `copyPath` for those). |
 | `funcs.worktree.onMissing` | enum: `warn` \| `silent` \| `block` | `warn` | What to do when a `copyPath` / `linkPath` source doesn't exist in the main worktree. `warn` prints to stderr and skips; `silent` skips quietly; `block` prints to stderr, tears down the just-created worktree (removes it, deletes the branch if it was newly created, and rolls back any parent directory `git new-tree` created), and exits non-zero. Applies only to entries sourced from local git config; entries from `.worktree-populate` follow the manifest's own `!onMissing` directive if set, otherwise fall back to this value. |
+| `funcs.worktree.runCmd` | string (multi-value) | none | Shell commands to run (via `sh -c`) in the new worktree after copy/link population. Set one entry per invocation with `git config --local --add funcs.worktree.runCmd '<cmd>'`. Config entries are always untagged (run unless `-R`). Skip per-run with `git new-tree -R`. |
+| `funcs.worktree.onRunFail` | enum: `warn` \| `block` | `warn` | What to do when a `runCmd` or manifest `run` entry fails. `warn` prints to stderr and continues; `block` prints to stderr, tears down the worktree, and exits non-zero. Applies to config-sourced entries; manifest entries follow `!onRunFail` if set, otherwise fall back to this value. |
 
 ### `.worktree-populate` (committed manifest)
 
@@ -114,31 +116,39 @@ new-tree` reads it in addition to the `funcs.worktree.copyPath` /
 with the team — commit the manifest and every clone automatically
 populates the same files into new worktrees.
 
-Format: one entry per line, `<mode> <path>`, where `<mode>` is `copy` or
-`link` and `<path>` is a repo-root-relative path (files or directories).
-Mode and path are separated by any run of whitespace (spaces or tabs);
-leading and trailing whitespace on the line is trimmed. Lines starting
-with `#` are comments; blank lines are ignored. Comments after a value
-on the same line (`copy .env  # local db`) are also stripped — so `#`
-cannot appear literally in a path.
+Format: one entry per line. `copy <path>` and `link <path>` entries
+take a repo-root-relative path (files or directories). `run <cmd>` runs
+a shell command in the new worktree; `run:<tag> <cmd>` runs only when
+`-S` includes `<tag>`. Mode/directive and argument are separated by any
+run of whitespace; leading and trailing whitespace on the line is
+trimmed. Lines starting with `#` are comments; blank lines are ignored.
+Comments after a value on the same line (`copy .env  # local db`) are
+also stripped — so `#` cannot appear literally in a path or command.
 
-`<path>` must be relative and cannot contain `..` segments; absolute
-paths and paths that would escape the worktree are rejected with a
-warning and skipped (same guard as `funcs.worktree.copyPath`
-config entries). Any first token that is not `copy`, `link`, or the
-`!onMissing` directive (below) is treated as an unknown directive —
-warned to stderr with `.worktree-populate:<lineno>` and skipped, so the
-rest of the manifest still applies.
+`<path>` for copy/link must be relative and cannot contain `..`
+segments; absolute paths and paths that would escape the worktree are
+rejected with a warning and skipped (same guard as
+`funcs.worktree.copyPath` config entries). Recognized directives are
+`copy`, `link`, `run`, `run:<tag>`, `!onMissing`, and `!onRunFail`.
+Any other first token is treated as an unknown directive — warned to
+stderr with `.worktree-populate:<lineno>` and skipped, so the rest of
+the manifest still applies.
 
 A `!onMissing <value>` directive line sets the missing-source behavior
-for entries listed in the manifest, where `<value>` is `warn`, `silent`,
-or `block` (same semantics as the `funcs.worktree.onMissing` config
-key). It overrides the config default for manifest-sourced entries only;
-config-sourced entries continue to follow `funcs.worktree.onMissing`.
-Position doesn't matter — the whole manifest uses the resolved value.
-If the directive is set more than once with different values, the last
-wins and a warning is printed. If absent, the manifest inherits
-`funcs.worktree.onMissing` (which itself defaults to `warn`).
+for copy/link entries listed in the manifest, where `<value>` is `warn`,
+`silent`, or `block` (same semantics as the `funcs.worktree.onMissing`
+config key). It overrides the config default for manifest-sourced
+entries only; config-sourced entries continue to follow
+`funcs.worktree.onMissing`. Position doesn't matter — the whole
+manifest uses the resolved value. If the directive is set more than once
+with different values, the last wins and a warning is printed. If
+absent, the manifest inherits `funcs.worktree.onMissing` (which itself
+defaults to `warn`).
+
+A `!onRunFail <value>` directive sets the failure behavior for `run`
+entries in the manifest, where `<value>` is `warn` or `block` (same
+semantics as `funcs.worktree.onRunFail`). Same scoping and override
+rules as `!onMissing`.
 
 ```
 # Team defaults for every worktree.
@@ -147,6 +157,8 @@ copy .env
 copy .env.local
 copy .vscode
 link shared/big-model.bin
+run  make dev-setup-python          # always runs
+run:full make build-all             # only with -S full
 ```
 
 The manifest and config entries are unioned; both are safe to use in the
@@ -166,6 +178,7 @@ warning — no clobbering.
     copyPath = .env
     copyPath = .env.local
     linkPath = shared/big-model.bin
+    runCmd = make dev-setup-python
 
 [funcs "refresh"]
     echo = true
