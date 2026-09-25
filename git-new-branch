@@ -32,6 +32,10 @@ helpTxt() {
 	body "'.' or '@' - the current branch."
 	body "-b cannot be combined with a <remote> argument, except for
 	'-b none', whose start point is the primary and so still honours it."
+	body "When <base> is a local branch, its current head is also recorded
+	(branch.<branch-name>.funcsBaseSha), so 'git resync' can still restack
+	past it via '--onto' if that branch is later deleted (swept after its
+	PR squash-merges, or by hand) instead of replaying its commits."
 
 	heading 'OPTIONS'
 	option '-b <base>' '(base) Base the new branch on <base> instead of the
@@ -147,6 +151,14 @@ fi
 	git checkout -b "$branch"
 	if [ -n "$base" ]; then
 		git config --local "branch.$branch.funcsBase" "$base"
+		# When the base is a local branch, also record its current head
+		# (branch.<branch>.funcsBaseSha) — see 'git stack' help. The new
+		# branch starts AT the base, so its head and the base's head are the
+		# same commit here; recorded anyway for uniformity with 'git stack'.
+		if git rev-parse --verify --quiet "refs/heads/$base" >/dev/null 2>&1; then
+			git config --local "branch.$branch.funcsBaseSha" \
+				"$(git rev-parse "refs/heads/$base")"
+		fi
 	fi
 	if [ "$modified" -gt 0 ]; then git stash pop; fi
 } >&4

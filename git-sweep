@@ -31,6 +31,13 @@ helpTxt() {
 	to a ref rather than a local branch) are always skipped: they are
 	deliberately maintained outside the primary, so the target containing them
 	does not mean they have landed. Delete them by hand when you mean to.'
+	body 'Deleting a branch re-points each stacked child'\''s funcsBase past
+	it (to the deleted branch'\''s own base - a grandparent, or the primary),
+	and also records the deleted branch'\''s last head as the child'\''s
+	funcsBaseSha, unless that base was itself a pin. That recorded head is
+	what lets a later "git resync" rebase the child "--onto" the target
+	without replaying the deleted branch'\''s already-landed commits - see
+	"git resync -h" and CONFIG.md.'
 
 	heading 'OPTIONS'
 	option '-n' '(dry-run) Show what would be deleted without deleting.'
@@ -188,9 +195,13 @@ while read branch commit; do
 	fi
 
 	# Snapshot the branch's stack base and children before deletion drops
-	# its config section
+	# its config section. The full head sha is captured here too (not the
+	# short $commit from for-each-ref) - it becomes each child's
+	# funcsBaseSha, the exclusion point 'git resync' rebases '--onto' once
+	# this branch is gone, so its already-landed commits are never replayed.
 	bBase=$(getBranchBase "$branch")
 	bChildren=$(getBranchChildren "$branch")
+	bHeadSha=$(git rev-parse "refs/heads/$branch")
 
 	# Check if branch is checked out in a worktree
 	wt_path=""
@@ -212,10 +223,14 @@ while read branch commit; do
 		fi
 		if [ -n "$bChildren" ] && [ $q -eq 0 ]; then
 			for child in $bChildren; do
-				if [ -n "$bBase" ]; then
+				if baseIsQualified "$bBase" 2>/dev/null; then
 					echo >&2 "  would re-point $child base -> $bBase"
+				elif [ -n "$bBase" ]; then
+					echo >&2 "  would re-point $child base -> $bBase" \
+						"(funcsBaseSha -> $bHeadSha)"
 				else
-					echo >&2 "  would re-point $child base -> primary"
+					echo >&2 "  would re-point $child base -> primary" \
+						"(funcsBaseSha -> $bHeadSha, for deleted-parent recovery)"
 				fi
 			done
 		fi
@@ -253,12 +268,29 @@ while read branch commit; do
 		echo "$branch $commit"
 		if [ -n "$bChildren" ]; then
 			for child in $bChildren; do
-				if [ -n "$bBase" ]; then
+				if baseIsQualified "$bBase" 2>/dev/null; then
+					# Grandparent base is a pin: current behavior, no recovery
+					# sha - a pin is never silently rewritten.
 					git config --local "branch.$child.funcsBase" "$bBase"
 					if [ $q -eq 0 ]; then echo >&2 "  re-pointed $child base -> $bBase"; fi
+				elif [ -n "$bBase" ]; then
+					git config --local "branch.$child.funcsBase" "$bBase"
+					git config --local "branch.$child.funcsBaseSha" "$bHeadSha"
+					if [ $q -eq 0 ]; then
+						echo >&2 "  re-pointed $child base -> $bBase" \
+							"(funcsBaseSha -> $bHeadSha)"
+					fi
 				else
 					git config --local --unset "branch.$child.funcsBase"
-					if [ $q -eq 0 ]; then echo >&2 "  re-pointed $child base -> primary"; fi
+					# Main recovery hook: even a primary-based child keeps a
+					# recorded exclusion point, so 'git resync' rebases it
+					# '--onto' the target from here instead of replaying
+					# $branch's already-landed (and now unreachable) commits.
+					git config --local "branch.$child.funcsBaseSha" "$bHeadSha"
+					if [ $q -eq 0 ]; then
+						echo >&2 "  re-pointed $child base -> primary" \
+							"(funcsBaseSha -> $bHeadSha, for deleted-parent recovery)"
+					fi
 				fi
 			done
 		fi

@@ -169,6 +169,31 @@ getBranchBase() (
 	git config --local --get "branch.$branch.funcsBase" 2>/dev/null || :
 )
 
+# Returns the raw recorded base-head sha of a branch
+# (branch.<branch>.funcsBaseSha), or nothing if unset. Exits 0 either way.
+# See resync's use of it: the last-known head of a stack parent, kept so a
+# child can still be rebased `--onto` the right exclusion point after the
+# parent branch itself is gone (deleted by sweep or by hand).
+# getBranchBaseSha <branch>
+getBranchBaseSha() (
+	branch=$1
+	git config --local --get "branch.$branch.funcsBaseSha" 2>/dev/null || :
+)
+
+# Returns success iff <sha> is both a resolvable commit and an ancestor of
+# <branch> — the two conditions that make a recorded funcsBaseSha safe to use
+# as a rebase --onto exclusion point. A sha that fails either check is stale
+# (e.g. the branch was reset, or the value predates this feature) and callers
+# should warn, clear it, and fall back to today's behavior.
+# validBaseSha <branch> <sha>
+validBaseSha() (
+	branch=$1
+	sha=$2
+	[ -n "$sha" ] || return 1
+	git rev-parse --verify --quiet "${sha}^{commit}" >/dev/null 2>&1 || return 1
+	git merge-base --is-ancestor "$sha" "refs/heads/$branch" 2>/dev/null
+)
+
 # Prints, one per line, the local branch names stacked on <branch> — those
 # whose funcsBase names it, spelled either bare or as refs/heads/<branch>.
 # The `none` sentinel is never a parent, so branches pinned with it are not

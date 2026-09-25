@@ -34,6 +34,14 @@ helpTxt() {
 	squash/rebase merge) is skipped over rather than replayed, and the child's
 	funcsBase is re-pointed past it, inheriting the parent's own base. Use
 	'git stack' to inspect the stack."
+	body "A parent that was already DELETED after a squash-merge - by 'git
+	sweep', or by hand - is recovered the same way, even though it no longer
+	exists to compare against: resync uses the recorded base head
+	(branch.<name>.funcsBaseSha, kept fresh by 'git stack', 'git new-branch
+	-b', 'git sweep', and resync itself) as the exclusion point and rebases
+	'--onto' the target, so the parent's pre-squash commits are not replayed.
+	This only covers a base recorded from this version onward; see
+	CONFIG.md."
 	body "With -p, every branch resync moved is pushed afterwards, parents
 	first, with --force-with-lease - which since git 2.30 also requires that
 	the remote tip be reachable from the branch's reflog, so a branch someone
@@ -113,7 +121,16 @@ fi
 current=$(git branch --show-current 2>/dev/null || :)
 myBase=$(getBranchBase "$current" 2>/dev/null || :)
 myChildren=""
-[ -n "$current" ] && myChildren=$(getBranchChildren "$current" 2>/dev/null || :)
+myBaseSha=""
+if [ -n "$current" ]; then
+	myChildren=$(getBranchChildren "$current" 2>/dev/null || :)
+	# A branch can have no recorded base and no children yet still carry a
+	# funcsBaseSha (e.g. `git sweep` just deleted its parent and re-pointed
+	# it to the primary): that is still a single-node "stack" the cascade
+	# below must handle, not the historical no-stack fast path, or the
+	# recorded recovery sha would never be consulted.
+	myBaseSha=$(getBranchBaseSha "$current" 2>/dev/null || :)
+fi
 
 # redirect output of the next block
 [ $v -eq 1 ] && exec 4>&1 || exec 4>/dev/null
@@ -232,7 +249,7 @@ fi
 
 rc=0
 
-if [ -z "$current" ] || { [ -z "$myBase" ] && [ -z "$myChildren" ]; }; then
+if [ -z "$current" ] || { [ -z "$myBase" ] && [ -z "$myChildren" ] && [ -z "$myBaseSha" ]; }; then
 	# Not part of a stack: exactly the historical behavior, plus the push.
 	if [ $push -eq 1 ] && [ -n "$current" ]; then
 		echo "$current" | captureUpstreams > "$presfile"
@@ -270,6 +287,27 @@ rebaseBranch() {
 	else
 		git rebase "$@" "$rbName"
 	fi
+}
+
+# Prints branch $1's funcsBaseSha on stdout iff it is set, resolves to a
+# commit, and is an ancestor of the branch — the conditions that make it
+# safe to use as a rebase --onto exclusion point (see helpers/validBaseSha).
+# Prints nothing otherwise. A set-but-unusable value (stale: the branch was
+# reset, or it predates this feature landing on a repo) is warned about and
+# cleared here, on the general rule that a bad recorded sha should never
+# silently block the plain/snapshot-based fallback the caller already has.
+checkBaseSha() {
+	cbsName=$1
+	cbsSha=$(getBranchBaseSha "$cbsName")
+	[ -n "$cbsSha" ] || return 0
+	if validBaseSha "$cbsName" "$cbsSha"; then
+		printf '%s' "$cbsSha"
+		return 0
+	fi
+	echo >&2 "warning: branch '$cbsName' has a stale funcsBaseSha ($cbsSha);" \
+		"ignoring and clearing it."
+	git config --local --unset "branch.$cbsName.funcsBaseSha" 2>/dev/null || :
+	return 0
 }
 
 # $1: branch that failed; $rbWt: worktree the rebase ran in (from
@@ -322,8 +360,23 @@ findRoot() {
 					root=$b; rootKind=none; rootBase=$val
 					return 0
 				fi
+				dSha=$(checkBaseSha "$b")
+				if [ -n "$dSha" ]; then
+					echo >&2 "warning: branch '$b' has funcsBase '$val', which no" \
+						"longer exists; its recorded head ($dSha) is still known, so" \
+						"'git resync' will rebase '$b' onto the target past it instead" \
+						"of replaying its commits."
+					git config --local --unset "branch.$b.funcsBase"
+					# funcsBaseSha is deliberately NOT cleared here: the root path
+					# below reads it this same run to perform the --onto recovery.
+					root=$b; rootKind=primary; rootBase="-"
+					return 0
+				fi
 				echo >&2 "warning: branch '$b' has funcsBase '$val', which no longer" \
-					"exists; treating '$b' as the stack root and clearing the stale link"
+					"exists; treating '$b' as the stack root and clearing the stale" \
+					"link (no recorded base head to recover from - only bases" \
+					"recorded by this version of git-stack/git-new-branch/git-sweep" \
+					"carry one)."
 				git config --local --unset "branch.$b.funcsBase"
 				root=$b; rootKind=primary; rootBase="-"
 				return 0
@@ -433,9 +486,22 @@ done < "$stackfile"
 				if [ $v -eq 1 ]; then echo "$name has no base; not rebasing it"; fi
 				continue
 			fi
-			rebaseBranch "$name" --autostash -X patience "$targetRef" \
-				|| cascadeFail "$name"
-			if [ $v -eq 1 ]; then echo "restacked $name onto $targetRef"; fi
+			rootSha=$(checkBaseSha "$name")
+			if [ -n "$rootSha" ]; then
+				# A stack parent was deleted (swept after a squash-merge, or
+				# by hand) since this root last had a local base: rebase past
+				# its recorded head instead of replaying its commits.
+				rebaseBranch "$name" --autostash -X patience --onto "$targetRef" "$rootSha" \
+					|| cascadeFail "$name"
+				git config --local --unset "branch.$name.funcsBaseSha" 2>/dev/null || :
+				if [ $v -eq 1 ]; then
+					echo "restacked $name onto $targetRef (recovered past deleted base)"
+				fi
+			else
+				rebaseBranch "$name" --autostash -X patience "$targetRef" \
+					|| cascadeFail "$name"
+				if [ $v -eq 1 ]; then echo "restacked $name onto $targetRef"; fi
+			fi
 			continue
 		fi
 
@@ -457,15 +523,35 @@ done < "$stackfile"
 			fi
 			rebaseBranch "$name" --autostash -X patience --onto "$newbase" "$psha" \
 				|| cascadeFail "$name"
-			if [ -n "$newcfg" ]; then
+			if [ "$gp" != "-" ]; then
+				# Re-pointed to a grandparent: it is still a local-branch
+				# base, so keep a fresh recovery sha for it too.
 				git config --local "branch.$name.funcsBase" "$newcfg"
+				git config --local "branch.$name.funcsBaseSha" \
+					"$(git rev-parse "refs/heads/$gp")"
+			elif [ -n "$newcfg" ]; then
+				# Re-pointed to the root's own pin: no cascade above a pin.
+				git config --local "branch.$name.funcsBase" "$newcfg"
+				git config --local --unset "branch.$name.funcsBaseSha" 2>/dev/null || :
 			else
+				# Re-pointed to the primary: plain rebase suffices hereafter.
 				git config --local --unset "branch.$name.funcsBase"
+				git config --local --unset "branch.$name.funcsBaseSha" 2>/dev/null || :
 			fi
 			if [ $v -eq 1 ]; then echo "restacked $name past merged '$parent' onto $newbase"; fi
 		else
-			rebaseBranch "$name" --autostash -X patience --onto "refs/heads/$parent" "$psha" \
+			# Prefer the child's persisted funcsBaseSha over the in-run
+			# snapshot when set+valid+ancestor: they agree when resync last
+			# saw the parent, and the persisted one is correct when sweep
+			# re-pointed the child to a grandparent since. $parent has
+			# already been restacked earlier in this same pass (parents
+			# first), so its head below is current.
+			childSha=$(checkBaseSha "$name")
+			useSha=${childSha:-$psha}
+			rebaseBranch "$name" --autostash -X patience --onto "refs/heads/$parent" "$useSha" \
 				|| cascadeFail "$name"
+			git config --local "branch.$name.funcsBaseSha" \
+				"$(git rev-parse "refs/heads/$parent")"
 			if [ $v -eq 1 ]; then echo "restacked $name onto $parent"; fi
 		fi
 	done < "$datafile"

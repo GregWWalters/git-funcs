@@ -57,6 +57,13 @@ helpTxt() {
 	holds for every later "git resync" without anyone having to remember it.
 	That is the point: "git resync" stays safe to run on every branch, so
 	whether to run it never becomes a per-push judgment call.'
+	body 'Stacking on a local branch also records that branch'\''s current head
+	sha (branch.<name>.funcsBaseSha), kept fresh by "git resync". If the
+	parent branch is later deleted - by "git sweep" after its PR
+	squash-merges, or by hand - this recorded head lets "git resync" rebase
+	the child "--onto" the target from the right exclusion point instead of
+	replaying the parent'\''s already-landed commits. It is cleared whenever
+	the base stops being a local branch.'
 
 	heading 'OPTIONS'
 	option '-n' '(none) Record no base; "git resync" never rebases the branch.'
@@ -158,6 +165,7 @@ if [ $writing -eq 1 ]; then
 			exit 0
 		fi
 		git config --local --unset "branch.$current.funcsBase"
+		git config --local --unset "branch.$current.funcsBaseSha" 2>/dev/null || :
 		report "unstacked $current (was '$old'); it follows $primary again."
 		exit 0
 	fi
@@ -166,6 +174,7 @@ if [ $writing -eq 1 ]; then
 
 	recordNone() {
 		git config --local "branch.$current.funcsBase" none
+		git config --local --unset "branch.$current.funcsBaseSha" 2>/dev/null || :
 		report "recorded $current with no base; 'git resync' will not rebase it."
 		exit 0
 	}
@@ -221,9 +230,15 @@ if [ $writing -eq 1 ]; then
 	kv=$(resolveBase "$current")
 	case "${kv%% *}" in
 		branch)
+			# Record the parent's current head too: it is the exclusion point
+			# 'git resync' falls back to --onto if the parent branch is later
+			# deleted (swept after a squash-merge, or by hand) — see CONFIG.md.
+			git config --local "branch.$current.funcsBaseSha" \
+				"$(git rev-parse "refs/heads/${kv#* }")"
 			report "stacked $current on $base; 'git resync' restacks the whole stack."
 			;;
 		*)
+			git config --local --unset "branch.$current.funcsBaseSha" 2>/dev/null || :
 			report "pinned $current to $base; 'git resync' rebases onto it, not the primary."
 			;;
 	esac

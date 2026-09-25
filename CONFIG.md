@@ -17,6 +17,7 @@ section. Use `git config --local` to set them.
 | Key | Type | Description |
 |-----|------|-------------|
 | `branch.<name>.funcsBase` | string | What local branch `<name>` is maintained against. Read by `git resync` (what to rebase onto), `git stack` (what to show), and `git sweep` (what to re-point children to, and what not to delete). Set by `git stack <base>` on the current branch, by `git new-branch -b <base>` at creation, or by hand with `git config --local branch.<name>.funcsBase <value>`. |
+| `branch.<name>.funcsBaseSha` | string | The last-known head commit of `<name>`'s recorded base, kept only while that base is a local branch (a stack parent). It is always reachable from `<name>` itself, so it survives the parent branch's deletion. `git resync` uses it as the `--onto` exclusion point when the parent branch is gone (swept after a squash-merge, or deleted by hand), so the parent's pre-squash commits are not replayed. Written by `git stack <base>` and `git new-branch -b <base>` (when `<base>` is a local branch), refreshed by `git resync` after every successful restack, and set on the deleted branch's children by `git sweep`. Cleared whenever the base stops being a local branch. |
 
 `funcsBase` has four possible answers, and every branch has one:
 
@@ -65,7 +66,10 @@ git stack -u
 If a `funcsBase` value stops resolving, how it was written decides what
 happens. A bare name (`feature/parent`) is treated as a stack parent that was
 deleted by hand: `git resync` unsets the stale link with a warning and the
-branch falls back to the primary. A qualified value (`refs/...` or
+branch falls back to the primary. If `funcsBaseSha` is also recorded and
+still valid, resync keeps it and uses it as the `--onto` exclusion point for
+the same restack, so the deleted parent's commits are not replayed — see
+`funcsBaseSha` above. A qualified value (`refs/...` or
 `<remote>/...`) was a deliberate pin, so it is reported but never rewritten,
 and the branch is left unrebased — silently reverting a pinned branch to
 following trunk is the one thing the pin exists to prevent. `git stack` (with no argument)
