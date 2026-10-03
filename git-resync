@@ -486,6 +486,10 @@ done < "$stackfile"
 				if [ $v -eq 1 ]; then echo "$name has no base; not rebasing it"; fi
 				continue
 			fi
+			if isMergedInto "$targetRef" "refs/heads/$name"; then
+				if [ $v -eq 1 ]; then echo "$name already merged into ${targetRef}; skipping rebase"; fi
+				continue
+			fi
 			rootSha=$(checkBaseSha "$name")
 			if [ -n "$rootSha" ]; then
 				# A stack parent was deleted (swept after a squash-merge, or
@@ -505,9 +509,46 @@ done < "$stackfile"
 			continue
 		fi
 
-		if git merge-base --is-ancestor "refs/heads/$parent" "refs/heads/$name" 2>/dev/null; then
+		if [ "$merged" = "0" ] && \
+			git merge-base --is-ancestor "refs/heads/$parent" "refs/heads/$name" 2>/dev/null; then
 			if [ $v -eq 1 ]; then echo "$name already based on $parent; skipping"; fi
 			continue
+		fi
+
+		# $psha is the parent's SHA from before this invocation's rebase
+		# loop. When the parent was rebased in a *prior* invocation (e.g.
+		# a grandparent was merged and the parent was restacked past it),
+		# $psha is the parent's already-rebased tip — which is not in the
+		# child's ancestry. The --onto would then use merge-base as the
+		# cutoff, replaying too many commits. Detect this and fall back to
+		# fork-point, which consults the parent's reflog to find where the
+		# child actually diverged.
+		# A valid persisted funcsBaseSha (see checkBaseSha) is also a
+		# candidate. Both may be ancestors of the child: a stale recorded sha
+		# (child rebased by hand since) is older than $psha, a sweep-recorded
+		# one (parent deleted, child re-pointed) is newer. Use the newer one
+		# so the most already-landed commits are excluded.
+		childSha=$(checkBaseSha "$name")
+		rbUpstream=${childSha:-$psha}
+		if [ -n "$childSha" ] && [ -n "$psha" ] && \
+			git merge-base --is-ancestor "$childSha" "$psha" 2>/dev/null && \
+			git merge-base --is-ancestor "$psha" "refs/heads/$name" 2>/dev/null; then
+			rbUpstream=$psha
+		fi
+		if ! git merge-base --is-ancestor "$rbUpstream" "refs/heads/$name" 2>/dev/null; then
+			fp=$(git merge-base --fork-point "refs/heads/$parent" \
+				"refs/heads/$name" 2>/dev/null || :)
+			if [ -n "$fp" ]; then
+				rbUpstream=$fp
+				if [ $v -eq 1 ]; then
+					echo "$name diverged from $parent outside this run; using fork-point ${fp%"${fp#??????????}"}"
+				fi
+			else
+				echo >&2 "git-resync: cannot find where '$name' diverged from '$parent'." \
+					"'$parent' was rebased (its tip is not in '$name's history)" \
+					"and the reflog fork-point has expired. Rebase '$name' manually."
+				exit 1
+			fi
 		fi
 
 		if [ "$merged" = "1" ]; then
@@ -521,7 +562,7 @@ done < "$stackfile"
 				newbase="refs/heads/$gp"
 				newcfg="$gp"
 			fi
-			rebaseBranch "$name" --autostash -X patience --onto "$newbase" "$psha" \
+			rebaseBranch "$name" --autostash -X patience --onto "$newbase" "$rbUpstream" \
 				|| cascadeFail "$name"
 			if [ "$gp" != "-" ]; then
 				# Re-pointed to a grandparent: it is still a local-branch
@@ -540,15 +581,9 @@ done < "$stackfile"
 			fi
 			if [ $v -eq 1 ]; then echo "restacked $name past merged '$parent' onto $newbase"; fi
 		else
-			# Prefer the child's persisted funcsBaseSha over the in-run
-			# snapshot when set+valid+ancestor: they agree when resync last
-			# saw the parent, and the persisted one is correct when sweep
-			# re-pointed the child to a grandparent since. $parent has
-			# already been restacked earlier in this same pass (parents
-			# first), so its head below is current.
-			childSha=$(checkBaseSha "$name")
-			useSha=${childSha:-$psha}
-			rebaseBranch "$name" --autostash -X patience --onto "refs/heads/$parent" "$useSha" \
+			# $parent has already been restacked earlier in this same pass
+			# (parents first), so its head below is current.
+			rebaseBranch "$name" --autostash -X patience --onto "refs/heads/$parent" "$rbUpstream" \
 				|| cascadeFail "$name"
 			git config --local "branch.$name.funcsBaseSha" \
 				"$(git rev-parse "refs/heads/$parent")"
