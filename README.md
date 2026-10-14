@@ -200,7 +200,8 @@ Both sources are unioned; duplicate destinations trigger a "destination
 already exists" warning without overwriting. Files and directories both
 work. Missing sources are handled per `funcs.worktree.onMissing` (config
 entries) or the manifest's `!onMissing` directive (`.worktree-populate`
-entries), each of `warn` (default; stderr + skip), `silent` (skip
+entries; a trailing `<mode> <path> <value>` overrides it per entry),
+each of `warn` (default; stderr + skip), `silent` (skip
 quietly), or `block` (stderr + tear down the worktree + exit non-zero).
 Absolute paths and paths containing `..` are rejected. Use `copy` for
 per-worktree editable state (e.g. `.env`), `link` for shared read-mostly

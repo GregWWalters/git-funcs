@@ -149,6 +149,12 @@ with different values, the last wins and a warning is printed. If
 absent, the manifest inherits `funcs.worktree.onMissing` (which itself
 defaults to `warn`).
 
+A single copy/link entry can override the resolved value with a trailing
+`warn`, `silent`, or `block` token: `copy .codegraph silent`. The last
+whitespace-separated token is taken as the override only when it is one
+of those three words, so a path whose final space-separated word is
+`warn`/`silent`/`block` can't be expressed.
+
 A `!onRunFail <value>` directive sets the failure behavior for `run`
 entries in the manifest, where `<value>` is `warn` or `block` (same
 semantics as `funcs.worktree.onRunFail`). Same scoping and override

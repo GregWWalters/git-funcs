@@ -43,7 +43,9 @@ destinations are never overwritten."
 git config key funcs.worktree.onMissing sets it for config-sourced
 entries (default 'warn'; values: 'warn' | 'silent' | 'block'). A
 '!onMissing <value>' directive line in .worktree-populate sets it for
-manifest-sourced entries, overriding the config default for those. 'warn'
+manifest-sourced entries, overriding the config default for those; a
+trailing value on a single entry ('copy <path> silent') overrides both
+for that entry. 'warn'
 prints to stderr and skips; 'silent' skips quietly; 'block' prints to
 stderr, tears down the new worktree, and exits non-zero. See CONFIG.md
 for the .worktree-populate file format."
@@ -210,7 +212,8 @@ fi
 # funcs.worktree.linkPath: absolute symlink pointing back at the source.
 # Existing destinations are never overwritten. Missing-source behavior is
 # per-entry, resolved from funcs.worktree.onMissing (config entries) or
-# a '!onMissing' directive in .worktree-populate (manifest entries):
+# a '!onMissing' directive in .worktree-populate (manifest entries), or a
+# trailing per-entry value ('copy <path> silent') in the manifest:
 #   warn   - stderr + skip (default)
 #   silent - skip quietly
 #   block  - stderr + tear down the worktree + exit non-zero
@@ -350,7 +353,19 @@ if [ $populate -eq 1 ]; then
 						if [ -z "$rel" ]; then
 							echo >&2 "worktree populate: .worktree-populate:$lineno '$mode' with no path; skipping"
 						else
-							printf '%s %s %s\n' "$mode" "$resolvedManifestOM" "$rel"
+							# Optional trailing per-entry override:
+							# '<mode> <path> warn|silent|block'.
+							om=$resolvedManifestOM
+							last=${rel##*[[:space:]]}
+							if [ "$last" != "$rel" ]; then
+								case "$last" in
+									warn|silent|block)
+										om=$last
+										rel=$(printf '%s' "${rel%"$last"}" | sed -e 's/[[:space:]]*$//')
+										;;
+								esac
+							fi
+							printf '%s %s %s\n' "$mode" "$om" "$rel"
 						fi
 						;;
 					*)
